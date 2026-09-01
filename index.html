@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -401,12 +402,19 @@
     }
     body.dark-theme .tabbar { background: #0f1b24 !important; border-color: #1e2f36 !important; }
     .tab-btn {
+      position: relative;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       gap: 0.18rem; padding: 0.6rem 0.25rem 0.55rem; border-radius: 0.9rem;
       font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.02em;
       width: 100%; min-width: 0;
     }
     .tab-btn .tab-icon { font-size: 17px; line-height: 1; }
+    .tab-badge {
+      position: absolute; top: 2px; right: 6px; min-width: 15px; height: 15px; padding: 0 3px;
+      border-radius: 999px; background: #dc2626; color: #fff; font-size: 9px; font-weight: 900;
+      line-height: 15px; text-align: center; box-shadow: 0 0 0 2px var(--aspect-surface-2, #fff);
+    }
+    body.dark-theme .tab-badge { box-shadow: 0 0 0 2px #0f1b24; }
     .tab-btn.bg-blue-700 {
       box-shadow: var(--shadow-pop);
       transform: translateY(-2px);
@@ -747,6 +755,7 @@
             <span id="header-compact-user">👤 Войти</span>
             <span id="header-compact-sync" title="Статус общей базы">🔴</span>
           </span>
+          <button onclick="openPaintLineModal()" id="paint-poured-btn" class="hidden text-white text-[9px] font-black uppercase leading-none px-2 py-1.5 bg-green-600 rounded-lg shrink-0" title="Сообщить печатнику и начальнику смены, что краска налита">🎨 Налил</button>
           <button onclick="openChatModal()" class="relative text-white/90 text-sm leading-none px-2 py-1.5 bg-blue-800/50 rounded-lg shrink-0" title="Чат с коллегой">
             💬
             <span id="chat-unread-badge-mini" class="hidden absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[8px] font-black rounded-full w-4 h-4 flex items-center justify-center leading-none">1</span>
@@ -832,20 +841,20 @@
     <div id="sync-settings-panel" class="hidden bg-slate-800/90 rounded-xl px-3 py-3 mt-1 space-y-2 text-left">
       <p id="sync-status-detail" class="text-[9px] text-blue-200 leading-relaxed">🔴 Не подключено — рецепты хранятся только на этом устройстве.</p>
       <details class="text-[9px] text-blue-200 leading-relaxed">
-        <summary class="cursor-pointer font-bold uppercase">Как подключить общую базу (один раз)</summary>
+        <summary class="cursor-pointer font-bold uppercase">Как подключить общую базу (Google Таблица, один раз)</summary>
         <ol class="list-decimal ml-4 mt-1 space-y-1">
-          <li>Один из вас заходит на <b>jsonbin.io</b> → «Войти через Google» (один клик, без паролей).</li>
-          <li>Слева открывает страницу <b>API Keys</b> и копирует <b>X-Master-Key</b>.</li>
-          <li>Вставляет этот ключ в поле «Ключ» ниже, поле «ID базы» оставляет пустым → нажимает «Подключить». Приложение создаст общее хранилище и покажет его ID.</li>
-          <li>Оба значения — <b>Ключ</b> и <b>ID базы</b> — нужно передать коллеге (например, сообщением) и ввести у него в те же поля → «Подключить». После этого оба работают с одной базой.</li>
+          <li>Создайте новую Google Таблицу (sheets.new) — она станет общей базой.</li>
+          <li>В ней откройте <b>Расширения → Apps Script</b>, вставьте код из файла <b>Code.gs</b> (см. инструкцию рядом с приложением) и сохраните.</li>
+          <li>Нажмите <b>Развернуть → Новое развёртывание</b> → тип «Веб-приложение». Кто имеет доступ: <b>«Все»</b>. Нажмите «Развернуть» и разрешите доступ своему аккаунту.</li>
+          <li>Скопируйте выданный URL (заканчивается на <b>/exec</b>), вставьте его в поле ниже → «Подключить».</li>
+          <li>Этот же URL передайте коллеге (сообщением) — он вставляет его у себя в то же поле → «Подключить». После этого оба работают с одной таблицей.</li>
         </ol>
-        <p class="mt-1 opacity-80">Бесплатный аккаунт jsonbin.io даёт разовый лимит запросов (не обновляется каждый месяц) — для двух колористов его хватает надолго. Обновление не мгновенное: нажимайте «🔄 Обновить» у «Библиотеки», чтобы подтянуть свежие рецепты коллеги.</p>
+        <p class="mt-1 opacity-80">Бесплатно, без лимита запросов в месяц (в рамках квот обычного Google-аккаунта). Обновление не мгновенное: нажимайте «🔄 Обновить» у «Библиотеки», чтобы подтянуть свежие рецепты коллеги. Данные видно и редактируемо прямо в самой Google Таблице (листы Recipes/Chat/Presence).</p>
       </details>
-      <input type="text" id="sync-key-input" placeholder="X-Master-Key с jsonbin.io" class="w-full p-2 rounded-lg text-[10px] text-black">
-      <input type="text" id="sync-bin-input" placeholder="ID базы (оставьте пустым, чтобы создать новую)" class="w-full p-2 rounded-lg text-[10px] text-black">
+      <input type="text" id="sync-url-input" placeholder="URL веб-приложения Apps Script (…/exec)" class="w-full p-2 rounded-lg text-[10px] text-black">
       <div class="grid grid-cols-2 gap-2">
-        <button onclick="connectJsonbinSync()" class="bg-emerald-600 rounded-lg py-1.5 text-[9px] font-black uppercase">🔗 Подключить</button>
-        <button onclick="disconnectJsonbinSync()" class="bg-red-700 rounded-lg py-1.5 text-[9px] font-black uppercase">🔌 Отключить</button>
+        <button onclick="connectSheetDbSync()" class="bg-emerald-600 rounded-lg py-1.5 text-[9px] font-black uppercase">🔗 Подключить</button>
+        <button onclick="disconnectSheetDbSync()" class="bg-red-700 rounded-lg py-1.5 text-[9px] font-black uppercase">🔌 Отключить</button>
       </div>
     </div>
     </div>
@@ -855,6 +864,7 @@
   <div class="tabbar sticky top-[92px] z-30 hidden" id="app-tabbar">
     <button id="tab-btn-colorist" onclick="switchView('colorist')" class="tab-btn btn-active bg-blue-700 text-white">
       <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 0 0 0 18h1.2a1.8 1.8 0 0 0 0-3.6h-.7a1.8 1.8 0 0 1 0-3.6h3.8A4.7 4.7 0 0 0 21 9.1C19.8 5.5 16.4 3 12 3Z"/><circle cx="7.5" cy="10" r=".8" fill="currentColor"/><circle cx="10" cy="6.8" r=".8" fill="currentColor"/><circle cx="14" cy="6.5" r=".8" fill="currentColor"/><circle cx="17" cy="9" r=".8" fill="currentColor"/></svg></span><span>Колорист</span>
+      <span id="tab-badge-colorist" class="tab-badge hidden">0</span>
     </button>
     <button id="tab-btn-history" onclick="switchView('history')" class="tab-btn btn-active bg-gray-100 text-gray-500">
       <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 9h6M9 13h6M9 17h4"/></svg></span><span>История</span>
@@ -877,13 +887,91 @@
     <button id="tab-btn-pigments" onclick="switchView('pigments')" class="tab-btn btn-active bg-gray-100 text-gray-500">
       <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6M10 3v6l-5.2 8.6A2.2 2.2 0 0 0 6.7 21h10.6a2.2 2.2 0 0 0 1.9-3.4L14 9V3"/><path d="M7.2 15h9.6M8.6 12.5h6.8"/></svg></span><span>База пигментов</span>
     </button>
+    <button id="tab-btn-dashboard" onclick="switchView('dashboard')" class="tab-btn btn-active bg-gray-100 text-gray-500">
+      <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span><span>Панель</span>
+    </button>
     <button id="tab-btn-help" onclick="switchView('help')" class="tab-btn btn-active bg-gray-100 text-gray-500">
       <span class="tab-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.6 2.6 0 1 1 4.3 2c-.9.7-1.8 1.1-1.8 2.5M12 17h.01"/></svg></span><span>Помощь</span>
     </button>
   </div>
 
-  <div id="view-colorist" class="p-4 space-y-6">
-    <!-- Переключатель режима съёмки -->
+  <div id="view-colorist" class="p-4 space-y-6 relative">
+    <!-- ===== Блокировка вкладки «Колорист» на время внесения данных =====
+         Пока колорист/начальник смены/мастер УПП вносят эталон+замес+рецепт
+         по конкретной линии, старший печатник этой линии видит вкладку
+         только для чтения (оверлей ниже). Лок общий (в облаке), отдельный
+         на каждую линию (1-4). Снять лок может кто угодно, кроме печатника —
+         это подстраховка, если колорист забыл завершить внесение. -->
+    <div id="colorist-lock-panel" class="hidden bg-white border border-gray-100 rounded-2xl p-4 space-y-2">
+      <h3 class="text-sm font-black text-gray-800 uppercase">🔒 Внесение данных по линиям</h3>
+      <p class="text-[9px] text-gray-400 leading-relaxed -mt-1">Начните внесение по своей линии — печатник этой линии не сможет менять данные, пока не завершите. Снять чужую блокировку можно кнопкой «Освободить» (например, если коллега забыл завершить).</p>
+      <div id="colorist-lock-lines" class="space-y-1.5"></div>
+    </div>
+
+    <!-- ===== Заявки «Нужна краска»: печатник → колорист =====
+         Отдельная лёгкая очередь поверх общей базы (поле paintRequests),
+         не путать с paintAlert ("налил, забирай") — здесь наоборот, печатник
+         сначала просит нужный цвет на своей линии, колорист берёт заявку в
+         работу и по готовности жмёт «Налил» — это одновременно закрывает
+         заявку и шлёт печатнику этой линии тот самый полноэкранный алерт.
+         Начальнику смены отдельно сигналим, если заявка висит без движения
+         дольше настроенного порога простоя (по умолчанию 15 минут, меняется
+         кнопкой "⏳ Порог простоя" над очередью). -->
+    <div id="paint-requests-wrap" class="hidden bg-white border border-gray-100 rounded-2xl p-4 space-y-3">
+      <div id="paint-request-form" class="hidden space-y-2">
+        <h3 class="text-sm font-black text-gray-800 uppercase">🧴 Нужна краска</h3>
+        <p class="text-[9px] text-gray-400 leading-relaxed -mt-1">Заявка уйдёт колористу и встанет в общую очередь. Как только цвет будет налит, вы получите обычное уведомление «Краска налита» на весь экран.</p>
+        <input type="text" id="paint-request-article" placeholder="Артикул / название цвета" class="w-full p-3 bg-gray-50 rounded-2xl outline-none font-bold text-sm border border-transparent focus:border-blue-300">
+        <div class="flex gap-2">
+          <input type="text" id="paint-request-qty" placeholder="Кол-во (напр. 5 кг)" class="w-28 shrink-0 p-2.5 bg-gray-50 rounded-2xl outline-none font-bold text-[11px] border border-transparent focus:border-blue-300">
+          <input type="text" id="paint-request-note" placeholder="Комментарий (необязательно)" class="flex-1 p-2.5 bg-gray-50 rounded-2xl outline-none font-bold text-[11px] border border-transparent focus:border-blue-300">
+        </div>
+        <!-- Срочность заявки: та же логика, что и у заявки на ремонт (🟢🟡🔴) —
+             печатник помечает, стоит ли линия прямо сейчас. Влияет на порядок
+             очереди у колориста (см. sortPaintRequestsForQueue). -->
+        <div class="space-y-1">
+          <div class="text-[8px] font-bold text-gray-400 uppercase text-center">Срочность</div>
+          <div id="paint-request-urgency-toggle" class="flex gap-1.5">
+            <button type="button" data-urgency="low" onclick="setPaintRequestUrgency('low')" class="flex-1 py-2 rounded-xl text-[9px] font-black uppercase btn-active">🟢 Не срочно</button>
+            <button type="button" data-urgency="medium" onclick="setPaintRequestUrgency('medium')" class="flex-1 py-2 rounded-xl text-[9px] font-black uppercase btn-active">🟡 В течение смены</button>
+            <button type="button" data-urgency="high" onclick="setPaintRequestUrgency('high')" class="flex-1 py-2 rounded-xl text-[9px] font-black uppercase btn-active">🔴 Стоит линия</button>
+          </div>
+        </div>
+        <button id="paint-request-submit-btn" onclick="submitPaintRequest()" class="w-full bg-blue-600 text-white py-3 rounded-2xl btn-active text-[11px] font-black uppercase">📨 Отправить заявку</button>
+        <div id="paint-request-mine-list" class="space-y-1.5 pt-1 max-h-56 overflow-y-auto pr-1"></div>
+      </div>
+      <div id="paint-request-queue" class="hidden space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <h3 class="text-sm font-black text-gray-800 uppercase">🧴 Заявки от печатников</h3>
+          <button id="overdue-threshold-toggle-btn" onclick="toggleOverdueThresholdPanel()" class="hidden text-[9px] font-black uppercase text-gray-400 shrink-0">⏳ Порог простоя</button>
+        </div>
+        <div id="overdue-threshold-panel" class="hidden bg-gray-50 rounded-xl p-3 space-y-2">
+          <p class="text-[9px] text-gray-400 leading-relaxed">Через сколько минут ожидания заявка считается простоем линии и об этом сигналим начальнику смены (звук + push).</p>
+          <div class="flex items-center gap-2">
+            <input type="number" id="overdue-threshold-input" min="1" max="180" step="1" class="w-20 p-2 bg-white rounded-xl outline-none font-bold text-sm border border-gray-200 text-center">
+            <span class="text-[10px] text-gray-500 font-bold">мин</span>
+            <button onclick="saveOverdueThreshold()" class="ml-auto bg-blue-600 text-white text-[10px] font-black uppercase px-3 py-2 rounded-xl">Сохранить</button>
+          </div>
+        </div>
+        <div id="paint-request-queue-list" class="space-y-1.5"></div>
+      </div>
+    </div>
+
+    <!-- Заказ краски (блок выше) намеренно ВНЕ зоны блокировки — печатник
+         должен иметь возможность заказать краску всегда, даже когда линия
+         заблокирована на время внесения эталона/замеса/рецепта. Блокировка
+         оверлеем ниже покрывает только сами поля ввода замера и рецепта. -->
+    <div id="colorist-editable-area" class="relative space-y-6">
+      <div id="colorist-lock-overlay" class="hidden absolute inset-0 z-40 bg-white/95 backdrop-blur-sm rounded-3xl">
+        <div class="sticky top-10 mx-4 bg-slate-900 text-white rounded-2xl p-5 text-center shadow-2xl space-y-2">
+          <div class="text-3xl">🔒</div>
+          <div class="text-sm font-black uppercase">Идёт внесение данных</div>
+          <div id="colorist-lock-overlay-meta" class="text-[11px] text-gray-300"></div>
+          <p class="text-[9px] text-gray-400 leading-relaxed">Пока колорист вносит эталон и замес по вашей линии, изменения здесь недоступны. Заказ краски выше по-прежнему работает. Экран обновится сам, как только внесение завершится.</p>
+        </div>
+      </div>
+
+      <!-- Переключатель режима съёмки -->
     <div class="flex items-center justify-center gap-2">
       <button id="mode-2photo-btn" onclick="setPhotoMode('dual')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase btn-active mode-btn-active">2 фото</button>
       <button id="mode-split-btn" onclick="setPhotoMode('split')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase btn-active mode-btn-inactive">1 фото (оба рядом)</button>
@@ -1498,6 +1586,7 @@
         </div>
         <div id="recipes" class="space-y-4"></div>
     </div>
+    </div>
   </div>
 
   <!-- Журнал правок: пошаговая лента того, что делали с замесом, пока подгоняли
@@ -1627,6 +1716,7 @@
       <button id="learning-subtab-twin" onclick="switchLearningSubTab('twin')" class="py-2 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-500">🧬 Двойник мастера</button>
       <button id="learning-subtab-errors" onclick="switchLearningSubTab('errors')" class="py-2 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-500">⚠️ Разбор ошибок</button>
       <button id="learning-subtab-trainee" onclick="switchLearningSubTab('trainee')" class="py-2 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-500">🎓 Режим ученика</button>
+      <button id="learning-subtab-printer" onclick="switchLearningSubTab('printer')" class="py-2 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-500 col-span-2">🖨️ Обучение печатника</button>
     </div>
 
     <!-- ===== Теоретический курс: основы колориста обойной фабрики =====
@@ -1716,6 +1806,57 @@
       <div class="flex gap-2">
         <input type="text" id="trainee-cert-name" placeholder="Имя ученика для справки..." class="flex-1 p-3 bg-white border-2 border-gray-100 rounded-2xl outline-none text-[11px] font-bold">
         <button onclick="printTraineeCertificate()" class="px-4 bg-indigo-50 text-indigo-700 rounded-2xl font-black uppercase text-[9px] border-2 border-indigo-100">🎓 Справка</button>
+      </div>
+    </div>
+
+    <!-- ===== Обучение печатника / ст.печатника: путь полотна по линии,
+         разбор чек-листа приладки, шпаргалка "где искать причину брака
+         по секциям" и мини-тест "Определи секцию". Фото реальных образцов
+         брака уже есть во вкладке "Контроль брака" → 📸 Справочник видов
+         брака — здесь не дублируем фото, а даём текстовую логику "что
+         произошло → на какой секции искать причину", которую печатнику
+         нужно держать в голове быстрее, чем листать справочник. ===== -->
+    <div id="learning-panel-printer" class="hidden space-y-3">
+      <div class="bg-white border border-gray-100 rounded-2xl p-4 space-y-2">
+        <div class="text-[11px] font-black uppercase text-gray-800">1️⃣ Путь полотна по линии</div>
+        <p class="text-[11px] text-gray-600 leading-relaxed">Камера контроля брака стоит одна — на столе смотки, то есть видит полотно уже <b>после всех секций</b>. Поэтому при любом отклонении важно понимать порядок: <b>Ольбрихт (печать) → Сушка → Тиснение → Стол смотки</b>. Причина почти всегда раньше по ходу полотна, чем то место, где брак заметили.</p>
+        <div class="grid grid-cols-2 gap-2 pt-1">
+          <div class="bg-slate-50 rounded-xl p-2.5"><div class="text-[10px] font-black text-slate-700">1. Ольбрихт</div><p class="text-[9px] text-slate-500 leading-relaxed mt-0.5">Печать рисунка: краска/паста, ракель, печатные валы, клише.</p></div>
+          <div class="bg-amber-50 rounded-xl p-2.5"><div class="text-[10px] font-black text-amber-700">2. Сушка</div><p class="text-[9px] text-amber-600 leading-relaxed mt-0.5">Полотно должно выйти полностью сухим, без конденсата.</p></div>
+          <div class="bg-sky-50 rounded-xl p-2.5"><div class="text-[10px] font-black text-sky-700">3. Тиснение</div><p class="text-[9px] text-sky-600 leading-relaxed mt-0.5">Фактура/рельеф — давление и износ вала тиснения.</p></div>
+          <div class="bg-emerald-50 rounded-xl p-2.5"><div class="text-[10px] font-black text-emerald-700">4. Стол смотки</div><p class="text-[9px] text-emerald-600 leading-relaxed mt-0.5">Финальный контроль и намотка в рулон.</p></div>
+        </div>
+      </div>
+
+      <div class="space-y-2">
+        <div class="text-[11px] font-black uppercase text-gray-800 px-1">2️⃣ Чек-лист приладки — зачем каждый пункт</div>
+        <div id="printer-checklist-explain-list" class="space-y-2"></div>
+      </div>
+
+      <div class="space-y-2">
+        <div class="text-[11px] font-black uppercase text-gray-800 px-1">3️⃣ Где искать причину брака — по секциям</div>
+        <div id="printer-cause-map-list" class="space-y-2"></div>
+        <p class="text-[9px] text-gray-400 leading-relaxed px-1">Полные фото реальных образцов и полный список видов брака — во вкладке «🚨 Контроль брака» → «📸 Справочник видов брака».</p>
+      </div>
+
+      <div class="bg-red-50 border border-red-100 rounded-2xl p-4 space-y-1.5">
+        <div class="text-[11px] font-black uppercase text-red-700">4️⃣ Техника безопасности на линии</div>
+        <ul class="text-[10px] text-red-700 leading-relaxed list-disc pl-4 space-y-1">
+          <li><b>Вращающиеся валы и ракель</b> — не касаться руками во время работы линии; устранять зацепку/намотку только после полной остановки.</li>
+          <li><b>Краска, паста, растворители</b> — работать в перчатках, избегать испарений без вентиляции, не курить рядом с краскоучастком.</li>
+          <li><b>Разлитая краска на полу</b> — вытирать сразу, скользкий пол у линии частая причина травм.</li>
+          <li><b>Сушильная секция</b> — горячие поверхности и валы, не проверять полотно голыми руками на выходе из сушки.</li>
+          <li><b>Неисправность заметили — сразу заявку</b> (кнопка «🔧 Заявка на ремонт/запчасть» на Панели), не пытаться чинить самому под напряжением/на ходу.</li>
+        </ul>
+      </div>
+
+      <div class="space-y-2">
+        <div class="flex justify-between items-center px-1">
+          <div class="text-[11px] font-black uppercase text-gray-800">5️⃣ Мини-тест «Определи секцию»</div>
+          <span id="printer-quiz-score" class="text-[9px] font-black text-gray-400"></span>
+        </div>
+        <p class="text-[9px] text-gray-400 leading-relaxed px-1 -mt-1">По описанию брака выберите секцию, где вероятнее всего искать причину, затем нажмите «Проверить».</p>
+        <div id="printer-quiz-list" class="space-y-2"></div>
       </div>
     </div>
   </div>
@@ -2030,6 +2171,104 @@
      «Контроль брака» (см. toggleVisionAnalytics/toggleVisionRollMap),
      только обобщённый в одну функцию toggleHelpSection(), общую для всех
      секций здесь. -->
+<!-- ===== Панель: набор ролевых фич, каждая видна только своей роли =====
+     Печатник/ст.печатник — чек-лист приладки + быстрые заявки на ремонт.
+     Начальник смены — сводный экран линий (кто на связи, что открыто) +
+     кнопка авто-сборки сводки смены. Директор/начальник цеха — KPI по браку
+     за период. Мастер УПП — простой план/заказы по линиям. -->
+<div id="view-dashboard" class="hidden p-4 space-y-6">
+  <h2 class="text-xl font-black text-gray-800 uppercase italic">📊 Панель</h2>
+  <div id="dash-no-role" class="hidden bg-white border border-gray-100 rounded-2xl p-4 text-[11px] text-gray-500 text-center">Войдите в личный кабинет (👤 наверху), чтобы увидеть свою панель.</div>
+
+  <!-- Печатник / ст.печатник -->
+  <div id="dash-printer-section" class="hidden space-y-4">
+    <div class="bg-white border border-gray-100 rounded-2xl p-4 space-y-2">
+      <div class="text-[10px] font-black uppercase text-gray-500">✅ Чек-лист приладки линии</div>
+      <p class="text-[9px] text-gray-400 leading-relaxed -mt-1">Отметьте пункты перед запуском линии и сдайте чек-лист — он попадёт в журнал смены с вашим именем и временем.</p>
+      <div id="dash-checklist-items" class="space-y-1.5"></div>
+      <button onclick="submitPrelaunchChecklist()" class="w-full bg-emerald-600 text-white py-2.5 rounded-xl font-black uppercase text-[10px] btn-active">✅ Сдать чек-лист</button>
+      <div id="dash-checklist-log" class="space-y-1 pt-1"></div>
+    </div>
+    <div class="bg-slate-900 rounded-2xl p-4 space-y-2 text-white">
+      <div class="text-[10px] font-black uppercase text-blue-300">🔧 Заявка на ремонт/запчасть</div>
+      <p class="text-[9px] text-gray-400 leading-relaxed -mt-1">Опишите проблему — заявку увидят начальник смены и начальник цеха. Можно приложить фото с линии.</p>
+      <textarea id="dash-maint-text" rows="2" placeholder="Например: течёт масло из редуктора Ольбрихта, секция 2" class="w-full p-2.5 bg-white/10 rounded-xl outline-none text-[11px] font-bold resize-none placeholder:text-gray-400"></textarea>
+      <div class="flex gap-2 items-center">
+        <select id="dash-maint-urgency" class="flex-1 p-2.5 bg-white/10 rounded-xl outline-none text-[10px] font-bold">
+          <option value="low">🟢 Не срочно</option>
+          <option value="medium" selected>🟡 В течение смены</option>
+          <option value="high">🔴 Срочно, стоит линия</option>
+        </select>
+        <input type="file" id="dash-maint-photo" accept="image/*" capture="environment" class="hidden" onchange="handleMaintPhotoSelect(event)">
+        <button onclick="document.getElementById('dash-maint-photo').click()" class="bg-white/10 text-white px-3 py-2.5 rounded-xl font-black text-[10px] shrink-0">📷</button>
+      </div>
+      <div id="dash-maint-photo-preview" class="hidden"></div>
+      <button onclick="submitMaintenanceRequest()" class="w-full bg-blue-600 text-white py-2.5 rounded-xl font-black uppercase text-[10px] btn-active">📨 Отправить заявку</button>
+    </div>
+    <div class="space-y-2">
+      <h3 class="text-sm font-black text-gray-800 uppercase">📜 Мои заявки</h3>
+      <div id="dash-my-maint-list" class="space-y-2"></div>
+    </div>
+  </div>
+
+  <!-- Начальник смены -->
+  <div id="dash-leadview-section" class="hidden space-y-4">
+    <div class="bg-white border border-gray-100 rounded-2xl p-4 space-y-2">
+      <div class="text-[10px] font-black uppercase text-gray-500">🏭 Все линии сразу</div>
+      <div id="dash-lines-overview" class="space-y-1.5"></div>
+    </div>
+    <div class="space-y-2">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-black text-gray-800 uppercase">🔧 Открытые заявки на ремонт</h3>
+        <span id="dash-maint-open-count" class="text-[9px] font-black text-red-600"></span>
+      </div>
+      <div id="dash-all-maint-list" class="space-y-2"></div>
+    </div>
+    <div class="bg-amber-50 border border-amber-100 rounded-2xl p-4 space-y-2">
+      <div class="text-[10px] font-black uppercase text-amber-800">📝 Автосводка смены</div>
+      <p class="text-[9px] text-amber-700 leading-relaxed -mt-1">Соберёт партии, брак и заявки за текущую смену в готовый текст — останется скопировать в заметку передачи на вкладке «Производство».</p>
+      <button onclick="buildShiftAutoSummary()" class="w-full bg-amber-600 text-white py-2.5 rounded-xl font-black uppercase text-[10px] btn-active">🧾 Собрать сводку</button>
+      <textarea id="dash-shift-summary" rows="6" readonly class="hidden w-full p-2.5 bg-white rounded-xl outline-none text-[10px] font-bold border border-amber-200 resize-none"></textarea>
+    </div>
+  </div>
+
+  <!-- Производственный директор / начальник цеха -->
+  <div id="dash-kpi-section" class="hidden space-y-4">
+    <div class="bg-white border border-gray-100 rounded-2xl p-4 space-y-2">
+      <div class="flex items-center justify-between">
+        <div class="text-[10px] font-black uppercase text-gray-500">📈 Брак по причинам</div>
+        <select id="dash-kpi-period" onchange="renderKpiDashboard()" class="text-[10px] p-2 bg-gray-50 rounded-xl outline-none font-bold">
+          <option value="1">За сутки</option>
+          <option value="7" selected>За 7 дней</option>
+          <option value="30">За 30 дней</option>
+        </select>
+      </div>
+      <div id="dash-kpi-summary" class="text-[10px] text-gray-500"></div>
+      <div id="dash-kpi-by-section" class="space-y-1.5 pt-1"></div>
+      <div class="text-[9px] font-black uppercase text-gray-400 pt-2">По типу дефекта</div>
+      <div id="dash-kpi-by-type" class="space-y-1.5"></div>
+    </div>
+  </div>
+
+  <!-- Мастер УПП -->
+  <div id="dash-orders-section" class="hidden space-y-4">
+    <div class="bg-slate-900 rounded-2xl p-4 space-y-2 text-white">
+      <div class="text-[10px] font-black uppercase text-blue-300">🗓 Новый заказ в план</div>
+      <div class="grid grid-cols-2 gap-2">
+        <input type="text" id="dash-order-article" placeholder="Артикул" class="p-2.5 bg-white/10 rounded-xl outline-none text-[11px] font-bold placeholder:text-gray-400">
+        <input type="text" id="dash-order-qty" placeholder="Кол-во, м" class="p-2.5 bg-white/10 rounded-xl outline-none text-[11px] font-bold placeholder:text-gray-400">
+        <input type="date" id="dash-order-deadline" class="p-2.5 bg-white/10 rounded-xl outline-none text-[11px] font-bold">
+        <input type="text" id="dash-order-line" placeholder="Линия" class="p-2.5 bg-white/10 rounded-xl outline-none text-[11px] font-bold placeholder:text-gray-400">
+      </div>
+      <button onclick="addProductionOrder()" class="w-full bg-blue-600 text-white py-2.5 rounded-xl font-black uppercase text-[10px] btn-active">➕ Добавить в план</button>
+    </div>
+    <div class="space-y-2">
+      <h3 class="text-sm font-black text-gray-800 uppercase">📋 План заказов</h3>
+      <div id="dash-orders-list" class="space-y-2"></div>
+    </div>
+  </div>
+</div>
+
 <div id="view-help" class="hidden p-4 space-y-3">
   <h2 class="help-page-title"><span class="page-title-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.6 2.6 0 1 1 4.3 2c-.9.7-1.8 1.1-1.8 2.5M12 17h.01"/></svg></span><span>Помощь</span></h2>
   <p class="text-[9px] text-gray-400 leading-relaxed -mt-2">Что делает каждая кнопка и экран — простыми словами. Нажмите на раздел, чтобы развернуть.</p>
@@ -2125,6 +2364,16 @@
             <button type="button" onclick="setLoginRole('upp_master')" id="login-role-upp_master" class="py-3 rounded-xl font-black uppercase text-xs border-2 border-slate-600 bg-white/5">Мастер УПП</button>
           </div>
         </div>
+        <div id="login-line-wrap" class="hidden">
+          <label class="text-[9px] font-bold uppercase text-gray-400 block mb-1">Линия, на которой вы работаете</label>
+          <div class="grid grid-cols-4 gap-2">
+            <button type="button" onclick="setLoginLine(1)" id="login-line-1" class="py-3 rounded-xl font-black text-sm border-2 border-slate-600 bg-white/5">1</button>
+            <button type="button" onclick="setLoginLine(2)" id="login-line-2" class="py-3 rounded-xl font-black text-sm border-2 border-slate-600 bg-white/5">2</button>
+            <button type="button" onclick="setLoginLine(3)" id="login-line-3" class="py-3 rounded-xl font-black text-sm border-2 border-slate-600 bg-white/5">3</button>
+            <button type="button" onclick="setLoginLine(4)" id="login-line-4" class="py-3 rounded-xl font-black text-sm border-2 border-slate-600 bg-white/5">4</button>
+          </div>
+          <p class="text-[9px] text-gray-500 mt-1 leading-relaxed">Оповещение «Краска налита» придёт только на выбранную линию.</p>
+        </div>
         <button onclick="saveLoginProfile()" class="w-full py-3 bg-emerald-600 rounded-2xl font-black uppercase text-xs">✅ Войти</button>
         <button onclick="logoutProfile()" id="logout-profile-btn" class="hidden w-full py-2 text-red-300 font-bold text-xs">Выйти из кабинета</button>
         <button onclick="closeLoginModal()" class="w-full py-2 text-gray-400 font-bold text-xs">Отмена</button>
@@ -2135,6 +2384,27 @@
 <!-- Чат: сообщения хранятся в той же общей базе (☁️), что и рецепты —
      поэтому виден коллеге почти сразу (обновляется каждые ~6 сек, пока
      окно чата открыто, и раз в 30 сек фоном для счётчика непрочитанных). -->
+<div id="paint-line-modal" class="hidden fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-6" onclick="if(event.target===this) closePaintLineModal()">
+  <div class="bg-white p-6 rounded-[2rem] space-y-3 max-w-sm w-full" onclick="event.stopPropagation()">
+    <h3 class="font-black uppercase text-gray-800 text-center leading-tight">🎨 Краска налита<br><span class="font-normal normal-case text-xs text-gray-400">на какой линии?</span></h3>
+    <p class="text-[10px] text-gray-400 text-center leading-relaxed">Оповещение получит печатник именно этой линии и начальник смены.</p>
+    <div class="grid grid-cols-2 gap-3">
+      <button onclick="confirmPaintLine(1)" class="py-6 rounded-2xl font-black text-3xl bg-green-600 text-white active:bg-green-700">1</button>
+      <button onclick="confirmPaintLine(2)" class="py-6 rounded-2xl font-black text-3xl bg-green-600 text-white active:bg-green-700">2</button>
+      <button onclick="confirmPaintLine(3)" class="py-6 rounded-2xl font-black text-3xl bg-green-600 text-white active:bg-green-700">3</button>
+      <button onclick="confirmPaintLine(4)" class="py-6 rounded-2xl font-black text-3xl bg-green-600 text-white active:bg-green-700">4</button>
+    </div>
+    <button onclick="closePaintLineModal()" class="w-full py-2 text-gray-400 font-bold text-xs">Отмена</button>
+  </div>
+</div>
+<div id="paint-poured-alert" class="hidden fixed inset-0 z-[999] bg-green-600 flex flex-col items-center justify-center text-center p-6" onclick="hidePaintAlert()">
+  <div class="text-7xl mb-4">🎨</div>
+  <div id="paint-poured-alert-line" class="text-2xl font-black uppercase text-white/90 leading-tight mb-1"></div>
+  <div class="text-3xl font-black uppercase text-white leading-tight mb-1">Краска налита</div>
+  <div class="text-3xl font-black uppercase text-white leading-tight mb-5">можно забирать</div>
+  <div id="paint-poured-alert-meta" class="text-sm text-white/90 font-bold"></div>
+  <div class="mt-8 text-[11px] text-white/70 uppercase font-black">Нажмите, чтобы скрыть</div>
+</div>
 <div id="chat-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-end sm:items-center justify-center" onclick="if(event.target===this) closeChatModal()">
   <div class="bg-white w-full sm:max-w-sm sm:rounded-[2rem] rounded-t-[2rem] flex flex-col overflow-hidden" style="height:82vh; max-height:640px;" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between px-4 py-3 bg-blue-700 text-white shrink-0">
@@ -2508,17 +2778,17 @@ async function azureSpeak(text) {
   await azureAudioEl.play();
 }
 
-// ---- Общая база (JSONBin.io) ----
+// ---- Общая база (Google Sheets через Apps Script) ----
 // Локальная IndexedDB (STORE_NAME) остаётся офлайн-копией "Библиотеки" на каждом
-// устройстве. Если колорист один раз вставит сюда Ключ и ID общего хранилища
-// JSONBin.io, рецепты дополнительно уходят в облако одним JSON-файлом и могут
-// быть подтянуты на любое другое устройство с теми же Ключом и ID — так у всех
-// колористов получается единый архив по артикулам, а не отдельные локальные базы.
-// В отличие от Firebase, здесь нет мгновенного «пуша» — обновление по кнопке
-// «🔄» у Библиотеки (и автоматически при сохранении/подключении).
-let jsonbinConfig = null;
-const JSONBIN_CONFIG_KEY = 'colorist_jsonbin_config';
-const JSONBIN_BASE = 'https://api.jsonbin.io/v3/b';
+// устройстве. Один раз вставляем сюда URL веб-приложения Google Apps Script,
+// привязанного к общей Google-таблице — и вся общая база (рецепты, чат,
+// presence, "Краска налита", калибровочные матрицы) хранится одним JSON-блобом
+// в ячейке A1 листа "Data" этой таблицы, плюс автоматически зеркалируется в
+// читаемые листы Recipes/Chat/Presence, чтобы записи можно было посмотреть
+// прямо в Google Sheets. В отличие от Firebase, здесь нет мгновенного «пуша» —
+// обновление по кнопке «🔄» у Библиотеки (и автоматически при сохранении/подключении).
+let sheetDbConfig = null;
+const SHEETDB_CONFIG_KEY = 'colorist_sheetdb_config';
 // ---- Чат колорист ↔ начальник смены ----
 // Хранится прямо в той же общей базе (поле "chat"), рядом с рецептами и
 // presence — отдельного сервера для сообщений не нужно. Обновляется тем же
@@ -2538,23 +2808,21 @@ const CHAT_AUTO_CLEAR_MS = 12 * 3600 * 1000;
 const CHAT_LAST_NOTIFIED_KEY = 'colorist_chat_last_notified';
 let chatLastClearTs = 0;
 let chatLastNotifiedTs = 0;
-// Ключ и ID общей базы "зашиты" прямо в код по умолчанию. Раньше при каждой
-// новой публикации файла (новый адрес на tiiny.host — новый источник для
-// браузера) localStorage сбрасывался, и оба значения приходилось вводить
-// заново вручную. Теперь если в localStorage конкретного устройства ещё
-// ничего нет — приложение просто берёт эти значения и подключается само,
-// без единого лишнего тапа. Если когда-нибудь понадобится завести ДРУГУЮ
-// общую базу — просто подключитесь через ⚙️/☁️ с новыми значениями, они
-// сохранятся в localStorage и получат приоритет перед этими значениями по
-// умолчанию.
-const JSONBIN_DEFAULT_CONFIG = {
-  masterKey: '$2a$10$PHFSAjKCOS0R6.4WLm2RmesCqIzqglSwCzv.oLVLSUQiXMEMb2SCu',
-  binId: '6a700241f5f4af5e29e32a74'
+// URL веб-приложения Apps Script "зашит" прямо в код по умолчанию (заполните
+// его своим адресом после деплоя — см. инструкцию в README_google_sheets.md).
+// Раньше при каждой новой публикации файла localStorage сбрасывался, и
+// значение приходилось вводить заново вручную. Теперь если в localStorage
+// конкретного устройства ещё ничего нет — приложение берёт значение по
+// умолчанию и подключается само, без единого лишнего тапа. Если понадобится
+// завести ДРУГУЮ общую базу — подключитесь через ⚙️/☁️ с новым URL, он
+// сохранится в localStorage и получит приоритет перед значением по умолчанию.
+const SHEETDB_DEFAULT_CONFIG = {
+  url: 'https://script.google.com/macros/s/AKfycbxFmekUSpUrOM5a-ldeg39IUy2r5GnYB-fxv9uZUnLF08_3HHnHiSayOsThfv6c5g/exec'
 };
 
-function loadJsonbinConfig() {
+function loadSheetDbConfig() {
   try {
-    const raw = localStorage.getItem(JSONBIN_CONFIG_KEY);
+    const raw = localStorage.getItem(SHEETDB_CONFIG_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       // Метка "disabled" ставится, когда колорист САМ явно нажал
@@ -2562,22 +2830,67 @@ function loadJsonbinConfig() {
       // умолчанию автоматически, иначе явное отключение тут же откатится
       // назад при следующей проверке синхронизации.
       if (parsed && parsed.disabled) return null;
-      if (parsed && parsed.masterKey && parsed.binId) return parsed;
+      if (parsed && parsed.url) return parsed;
     }
-  } catch (e) { /* повреждённые данные в localStorage — просто используем значения по умолчанию ниже */ }
+  } catch (e) { /* повреждённые данные в localStorage — просто используем значение по умолчанию ниже */ }
   // В localStorage вообще ничего нет (например, свежая публикация файла на
   // новом адресе, где ещё никто явно не отключал базу) — используем
-  // зашитые по умолчанию значения и сразу сохраняем их в localStorage,
+  // зашитое по умолчанию значение и сразу сохраняем его в localStorage,
   // чтобы дальше работать как обычно.
-  if (JSONBIN_DEFAULT_CONFIG && JSONBIN_DEFAULT_CONFIG.masterKey && JSONBIN_DEFAULT_CONFIG.binId) {
-    saveJsonbinConfig(JSONBIN_DEFAULT_CONFIG);
-    return JSONBIN_DEFAULT_CONFIG;
+  if (SHEETDB_DEFAULT_CONFIG && SHEETDB_DEFAULT_CONFIG.url && !SHEETDB_DEFAULT_CONFIG.url.startsWith('ВСТАВЬТЕ_')) {
+    saveSheetDbConfig(SHEETDB_DEFAULT_CONFIG);
+    return SHEETDB_DEFAULT_CONFIG;
   }
   return null;
 }
 
-function saveJsonbinConfig(cfg) {
-  try { localStorage.setItem(JSONBIN_CONFIG_KEY, JSON.stringify(cfg)); } catch (e) {}
+function saveSheetDbConfig(cfg) {
+  try { localStorage.setItem(SHEETDB_CONFIG_KEY, JSON.stringify(cfg)); } catch (e) {}
+}
+
+// ---- Единые помощники для чтения/записи общего JSON-снимка в Google Sheets ----
+// fetchCloudSnapshot() всегда возвращает объект СО ВСЕМИ полями (даже если их
+// ещё нет в таблице), чтобы каждому месту в коде не приходилось повторять
+// "(data.record && data.record.recipes) || []" — именно этот повтор в старой
+// версии на JSONBin был источником багов, если где-то забывали одно поле.
+// pushCloudSnapshot(record) отправляет объект ЦЕЛИКОМ, как есть — вызывающий
+// код обязан сначала получить свежий снимок через fetchCloudSnapshot(),
+// поменять нужное поле и отправить обратно весь объект, иначе затрёт чужие
+// изменения (то же правило, что было и с JSONBin).
+// ВАЖНО: fetch к Apps Script делаем БЕЗ заголовка Content-Type: application/json
+// — иначе браузер шлёт CORS preflight (OPTIONS), который Apps Script не
+// обрабатывает, и запрос падает. Тело остаётся JSON-строкой, Apps Script сам
+// разбирает e.postData.contents через JSON.parse.
+async function fetchCloudSnapshot() {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return null;
+  const resp = await fetch(cfg.url + '?action=get&t=' + Date.now());
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  const data = await resp.json();
+  return {
+    recipes: data.recipes || [],
+    presence: data.presence || [],
+    deletedRecipeIds: data.deletedRecipeIds || [],
+    chat: data.chat || [],
+    paintAlert: data.paintAlert || null,
+    paintRequests: Array.isArray(data.paintRequests) ? data.paintRequests : [],
+    baseMultipliers: data.baseMultipliers || {},
+    lotMultipliers: data.lotMultipliers || {},
+    pigmentLotMultipliers: data.pigmentLotMultipliers || {}
+  };
+}
+
+async function pushCloudSnapshot(record) {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return false;
+  const resp = await fetch(cfg.url, {
+    method: 'POST',
+    body: JSON.stringify({ action: 'put', payload: record })
+  });
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  const out = await resp.json().catch(() => ({ ok: true }));
+  if (out && out.ok === false) throw new Error(out.error || 'Ошибка записи в таблицу');
+  return true;
 }
 
 function toggleSyncSettings() {
@@ -2585,13 +2898,9 @@ function toggleSyncSettings() {
   if (!panel) return;
   panel.classList.toggle('hidden');
   if (!panel.classList.contains('hidden')) {
-    const cfg = loadJsonbinConfig();
-    const keyEl = document.getElementById('sync-key-input');
-    const binEl = document.getElementById('sync-bin-input');
-    if (cfg) {
-      if (keyEl && !keyEl.value.trim()) keyEl.value = cfg.masterKey || '';
-      if (binEl && !binEl.value.trim()) binEl.value = cfg.binId || '';
-    }
+    const cfg = loadSheetDbConfig();
+    const urlEl = document.getElementById('sync-url-input');
+    if (cfg && urlEl && !urlEl.value.trim()) urlEl.value = cfg.url || '';
   }
 }
 
@@ -2717,6 +3026,7 @@ const USER_PROFILE_KEY = 'colorist_user_profile';
 const PRESENCE_STALE_MS = 3 * 60 * 1000; // после 3 минут без "пинга" считаем человека offline
 let currentUserProfile = null;
 let pendingLoginRole = 'colorist';
+let pendingLoginLine = null;
 let presenceHeartbeatTimer = null;
 let currentOnlinePresence = [];
 
@@ -2780,8 +3090,10 @@ function openLoginModal() {
   if (!el) return;
   currentUserProfile = currentUserProfile || loadUserProfile();
   pendingLoginRole = (currentUserProfile && currentUserProfile.role) || 'colorist';
+  pendingLoginLine = (currentUserProfile && currentUserProfile.line) || null;
   document.getElementById('login-name-input').value = currentUserProfile ? currentUserProfile.name : '';
   setLoginRole(pendingLoginRole);
+  setLoginLine(pendingLoginLine);
   document.getElementById('logout-profile-btn').classList.toggle('hidden', !currentUserProfile);
   el.classList.remove('hidden');
   setTimeout(() => { const inp = document.getElementById('login-name-input'); if (inp) inp.focus(); }, 50);
@@ -2804,23 +3116,38 @@ function setLoginRole(role) {
     const btn = document.getElementById(id);
     if (btn) btn.className = (span ? span + ' ' : '') + 'py-3 rounded-xl font-black uppercase text-xs border-2 ' + (role === key ? 'border-blue-500 bg-blue-600 text-white' : 'border-slate-600 bg-white/5');
   });
+  // Линию выбирает только печатник — остальным ролям она не нужна (начальник
+  // смены и колорист видят/шлют оповещения без привязки к конкретной линии).
+  const lineWrap = document.getElementById('login-line-wrap');
+  if (lineWrap) lineWrap.classList.toggle('hidden', role !== 'senior_printer');
+}
+function setLoginLine(line) {
+  pendingLoginLine = line || null;
+  [1, 2, 3, 4].forEach(n => {
+    const btn = document.getElementById('login-line-' + n);
+    if (btn) btn.className = 'py-3 rounded-xl font-black text-sm border-2 ' + (Number(pendingLoginLine) === n ? 'border-blue-500 bg-blue-600 text-white' : 'border-slate-600 bg-white/5');
+  });
 }
 function saveLoginProfile() {
   const name = (document.getElementById('login-name-input').value || '').trim();
   if (!name) { toast('Введите имя, чтобы войти в личный кабинет.'); return; }
-  currentUserProfile = { name, role: pendingLoginRole };
+  if (pendingLoginRole === 'senior_printer' && !pendingLoginLine) { toast('Выберите линию, на которой вы работаете.'); return; }
+  currentUserProfile = { name, role: pendingLoginRole, line: pendingLoginRole === 'senior_printer' ? pendingLoginLine : null };
   saveUserProfileToStorage(currentUserProfile);
   renderUserBadge();
   closeLoginModal();
   toast('Добро пожаловать, ' + name + '!');
   sendPresenceHeartbeat();
+  renderColoristLockUI();
 }
 function logoutProfile() {
   currentUserProfile = null;
   try { localStorage.removeItem(USER_PROFILE_KEY); } catch (e) {}
   renderUserBadge();
   renderOnlineUsers([]);
+  renderPaintRequestsSection();
   closeLoginModal();
+  renderColoristLockUI();
 }
 function isShiftLead() {
   return !!(currentUserProfile && currentUserProfile.role === 'shift_lead');
@@ -2838,42 +3165,50 @@ function renderUserBadge() {
   if (compact) compact.textContent = currentUserProfile ? ('👤 ' + currentUserProfile.name) : '👤 Войти';
   if (!badge) return;
   if (currentUserProfile) {
-    badge.innerHTML = '👤 ' + escapeHtmlProd(currentUserProfile.name) + ' <span class="opacity-70">· ' + roleLabel(currentUserProfile.role) + '</span>';
+    const lineSuffix = (currentUserProfile.role === 'senior_printer' && currentUserProfile.line) ? (' (линия ' + currentUserProfile.line + ')') : '';
+    badge.innerHTML = '👤 ' + escapeHtmlProd(currentUserProfile.name) + ' <span class="opacity-70">· ' + roleLabel(currentUserProfile.role) + lineSuffix + '</span>';
     const masterEl = document.getElementById('master-name');
     if (masterEl && !masterEl.value) masterEl.value = currentUserProfile.name;
   } else {
     badge.innerHTML = '👤 Войти';
   }
   applyRolePermissions();
+  // Кнопку "налил краску" видит только колорист; уведомление о налитой
+  // краске получают печатник и начальник смены — им запускаем опрос общей
+  // базы, остальным ролям он не нужен.
+  const paintBtn = document.getElementById('paint-poured-btn');
+  if (paintBtn) paintBtn.classList.toggle('hidden', !(currentUserProfile && currentUserProfile.role === 'colorist'));
+  // Раньше опрос общей базы каждые 5с запускался только для печатника и
+  // начальника смены (им нужен алерт "налил краску"). Теперь в том же цикле
+  // ещё и очередь заявок "нужна краска" — она нужна вообще всем ролям
+  // (колористу и начальнику смены — очередь, печатнику — статус своих
+  // заявок), поэтому опрос запускаем при любом входе в личный кабинет.
+  if (currentUserProfile) {
+    startPaintAlertPolling();
+  } else {
+    stopPaintAlertPolling();
+  }
 }
 
 // Раз в 30 секунд (и сразу при входе / возврате в приложение) отправляем в общую
 // базу отметку "я на связи", а заодно подтягиваем отметки коллег и рисуем список.
 async function sendPresenceHeartbeat() {
   if (!currentUserProfile) { renderOnlineUsers([]); return; }
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  if (!cfg || !cfg.binId || !cfg.masterKey) { renderOnlineUsers([]); return; }
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) { renderOnlineUsers([]); return; }
   try {
-    const getResp = await fetch(JSONBIN_BASE + '/' + cfg.binId + '/latest', {
-      headers: { 'X-Master-Key': cfg.masterKey }
-    });
-    if (!getResp.ok) throw new Error('HTTP ' + getResp.status);
-    const data = await getResp.json();
-    const remoteRecipes = (data.record && data.record.recipes) || [];
-    const remoteDeletedIds = (data.record && data.record.deletedRecipeIds) || [];
-    const remoteChat = (data.record && data.record.chat) || [];
+    const remote = await fetchCloudSnapshot();
+    if (!remote) return;
     const now = Date.now();
-    let presence = (data.record && data.record.presence) || [];
+    let presence = remote.presence || [];
     presence = presence.filter(p => p && p.name && (now - (p.ts || 0)) < PRESENCE_STALE_MS && p.name !== currentUserProfile.name);
-    presence.push({ name: currentUserProfile.name, role: currentUserProfile.role, ts: now });
-    const putResp = await fetch(JSONBIN_BASE + '/' + cfg.binId, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Master-Key': cfg.masterKey },
-      body: JSON.stringify({ recipes: remoteRecipes, presence, deletedRecipeIds: remoteDeletedIds, chat: remoteChat })
-    });
-    if (putResp.ok) {
+    presence.push({ name: currentUserProfile.name, role: currentUserProfile.role, line: currentUserProfile.line || null, ts: now });
+    remote.presence = presence;
+    const ok = await pushCloudSnapshot(remote);
+    if (ok) {
       renderOnlineUsers(presence);
-      applyIncomingChat(remoteChat);
+      applyIncomingChat(remote.chat);
+      applyIncomingMultipliers(remote);
     }
   } catch (e) {
     console.error(e);
@@ -2891,7 +3226,7 @@ function renderOnlineUsers(presence) {
     bar.innerHTML = '';
     return;
   }
-  if (!jsonbinConfig && !loadJsonbinConfig()) {
+  if (!sheetDbConfig && !loadSheetDbConfig()) {
     bar.innerHTML = '<span class="text-[8px] text-blue-300/70">Подключите общую базу (☁️), чтобы видеть коллег онлайн</span>';
     return;
   }
@@ -2902,7 +3237,7 @@ function renderOnlineUsers(presence) {
   bar.innerHTML = '<span class="text-[8px] text-blue-200 opacity-70 mr-1">Онлайн:</span>' + online.map(p => {
     return '<span class="inline-flex items-center gap-1 bg-slate-800/70 rounded-full px-2 py-0.5 text-[8px] font-bold">' +
       '<span class="w-1.5 h-1.5 rounded-full ' + roleDotClass(p.role) + '"></span>' +
-      escapeHtmlProd(p.name) + ' <span class="opacity-60">(' + roleShortLabel(p.role) + ')</span></span>';
+      escapeHtmlProd(p.name) + ' <span class="opacity-60">(' + roleShortLabel(p.role) + (p.role === 'senior_printer' && p.line ? ', линия ' + p.line : '') + ')</span></span>';
   }).join('');
 }
 
@@ -2943,97 +3278,81 @@ function deleteRecipeConfirm(id, name) {
     toast('Рецепт удалён');
     logCorrection(`Удалили рецепт «${name || ''}»`, 'delete');
     loadRecipes(document.getElementById('recipe-search') ? document.getElementById('recipe-search').value : '');
-    const cfg = jsonbinConfig || loadJsonbinConfig();
-    if (!cfg || !cfg.binId || !cfg.masterKey) return;
+    const cfg = sheetDbConfig || loadSheetDbConfig();
+    if (!cfg || !cfg.url) return;
     try {
-      const getResp = await fetch(JSONBIN_BASE + '/' + cfg.binId + '/latest', { headers: { 'X-Master-Key': cfg.masterKey } });
-      if (!getResp.ok) return;
-      const data = await getResp.json();
-      const remoteRecipes = ((data.record && data.record.recipes) || []).filter(r => r.id !== id);
-      const deletedRecipeIds = Array.from(new Set([...(((data.record && data.record.deletedRecipeIds) || [])), id]));
-      const presence = (data.record && data.record.presence) || [];
-      const chat = (data.record && data.record.chat) || [];
-      await fetch(JSONBIN_BASE + '/' + cfg.binId, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-Master-Key': cfg.masterKey },
-        body: JSON.stringify({ recipes: remoteRecipes, presence, deletedRecipeIds, chat })
-      });
+      const remote = await fetchCloudSnapshot();
+      if (!remote) return;
+      remote.recipes = (remote.recipes || []).filter(r => r.id !== id);
+      remote.deletedRecipeIds = Array.from(new Set([...(remote.deletedRecipeIds || []), id]));
+      await pushCloudSnapshot(remote);
     } catch (e) { console.error(e); }
   };
 }
 
-async function connectJsonbinSync() {
-  const key = (document.getElementById('sync-key-input').value || '').trim();
-  let binId = (document.getElementById('sync-bin-input').value || '').trim();
-  if (!key) { toast('Вставьте X-Master-Key со страницы API Keys на jsonbin.io.'); return; }
+async function connectSheetDbSync() {
+  const url = (document.getElementById('sync-url-input').value || '').trim();
+  if (!url) { toast('Вставьте URL веб-приложения Apps Script.'); return; }
   setSyncStatus('🟡 Подключаемся...');
   try {
-    if (!binId) {
+    sheetDbConfig = { url };
+    saveSheetDbConfig(sheetDbConfig);
+    await syncFromSheetDb(false);
+    // Если в облаке ещё нет ни одного рецепта (свежая таблица) — сразу
+    // отправляем туда локальный архив этого устройства, чтобы база не
+    // казалась пустой сразу после подключения.
+    const remote = await fetchCloudSnapshot();
+    if (remote && !remote.recipes.length) {
       const localList = await getAllLocalRecipes();
-      const resp = await fetch(JSONBIN_BASE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Master-Key': key, 'X-Bin-Name': 'colorist-recipes' },
-        body: JSON.stringify({ recipes: localList })
-      });
-      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' — проверьте ключ');
-      const data = await resp.json();
-      binId = data.metadata.id;
-      document.getElementById('sync-bin-input').value = binId;
-      toast('Общее хранилище создано. Передайте коллеге эти два значения, чтобы он подключился к той же базе:\n\nКлюч: ' + key + '\nID базы: ' + binId);
+      if (localList.length) { remote.recipes = localList; await pushCloudSnapshot(remote); }
     }
-    jsonbinConfig = { masterKey: key, binId };
-    saveJsonbinConfig(jsonbinConfig);
-    await syncFromJsonbin(false);
     sendPresenceHeartbeat();
+    toast('Общая база подключена.');
   } catch (e) {
     console.error(e);
     setSyncStatus('⚠️ Не удалось подключиться: ' + (e.message || e));
   }
 }
 
-function disconnectJsonbinSync() {
+function disconnectSheetDbSync() {
   if (!confirm('Отключить общую базу? Рецепты останутся только на этом устройстве, в локальном архиве.')) return;
-  jsonbinConfig = null;
+  sheetDbConfig = null;
   // Ставим явную метку "отключено", а не просто удаляем запись — иначе
-  // при следующей проверке синхронизации loadJsonbinConfig() снова
-  // подставил бы значения по умолчанию и отключение тут же откатилось бы.
-  try { localStorage.setItem(JSONBIN_CONFIG_KEY, JSON.stringify({ disabled: true })); } catch (e) {}
+  // при следующей проверке синхронизации loadSheetDbConfig() снова
+  // подставил бы значение по умолчанию и отключение тут же откатилось бы.
+  try { localStorage.setItem(SHEETDB_CONFIG_KEY, JSON.stringify({ disabled: true })); } catch (e) {}
   setSyncStatus('🔴 Локально (без общей базы) — нажмите ☁️, чтобы подключить');
   loadRecipes(document.getElementById('recipe-search').value);
 }
 
-async function syncFromJsonbin(isManual) {
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  if (!cfg || !cfg.binId || !cfg.masterKey) {
+async function syncFromSheetDb(isManual) {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) {
     setSyncStatus('🔴 Локально (без общей базы) — нажмите ☁️, чтобы подключить');
     return;
   }
-  jsonbinConfig = cfg;
+  sheetDbConfig = cfg;
   setSyncStatus('🟡 Обновляем из общей базы...');
   try {
-    const resp = await fetch(JSONBIN_BASE + '/' + cfg.binId + '/latest', {
-      headers: { 'X-Master-Key': cfg.masterKey }
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const data = await resp.json();
-    const remoteList = (data.record && data.record.recipes) || [];
-    const deletedRecipeIds = (data.record && data.record.deletedRecipeIds) || [];
-    const merged = mergeRecipeLists(remoteList, await getAllLocalRecipes(), deletedRecipeIds);
+    const remote = await fetchCloudSnapshot();
+    if (!remote) throw new Error('Нет ответа от таблицы');
+    const merged = mergeRecipeLists(remote.recipes, await getAllLocalRecipes(), remote.deletedRecipeIds);
     if (db) {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      deletedRecipeIds.forEach(id => store.delete(id));
+      remote.deletedRecipeIds.forEach(id => store.delete(id));
       merged.forEach(r => store.put(r));
     }
     renderRecipesList(merged, document.getElementById('recipe-search').value);
-    setSyncStatus('🟢 Общая база подключена (ID: ' + cfg.binId + ') — обновлено ' + new Date().toLocaleTimeString('ru-RU'));
+    setSyncStatus('🟢 Общая база подключена (Google Sheets) — обновлено ' + new Date().toLocaleTimeString('ru-RU'));
     markSyncSuccess();
-    if (typeof renderOnlineUsers === 'function') renderOnlineUsers((data.record && data.record.presence) || []);
-    applyIncomingChat((data.record && data.record.chat) || []);
+    if (typeof renderOnlineUsers === 'function') renderOnlineUsers(remote.presence);
+    applyIncomingChat(remote.chat);
+    applyIncomingMultipliers(remote);
   } catch (e) {
     console.error(e);
     setSyncStatus('⚠️ Не удалось обновить из общей базы: ' + (e.message || e));
-    if (isManual) toast('Не удалось обновить: проверьте интернет, Ключ и ID базы в настройках (☁️).');
+    if (isManual) toast('Не удалось обновить: проверьте интернет и URL таблицы в настройках (☁️).');
   }
 }
 
@@ -3042,68 +3361,51 @@ async function syncFromJsonbin(isManual) {
 // добавить свой артикул в облако, а мы его ещё не подтянули, наша отправка
 // полностью затирает чужую запись (именно это было причиной "артикул есть
 // у меня, но у колориста в базе его нет").
-async function pushToJsonbin() {
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  if (!cfg || !cfg.binId || !cfg.masterKey) return;
+async function pushToSheetDb() {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return;
   try {
-    let remoteList = [];
-    let remotePresence = [];
-    let remoteDeletedIds = [];
-    let remoteChat = [];
-    try {
-      const getResp = await fetch(JSONBIN_BASE + '/' + cfg.binId + '/latest', {
-        headers: { 'X-Master-Key': cfg.masterKey }
-      });
-      if (getResp.ok) {
-        const getData = await getResp.json();
-        remoteList = (getData.record && getData.record.recipes) || [];
-        remotePresence = (getData.record && getData.record.presence) || [];
-        remoteDeletedIds = (getData.record && getData.record.deletedRecipeIds) || [];
-        remoteChat = (getData.record && getData.record.chat) || [];
-      }
-    } catch (e) { /* если не удалось подтянуть — всё равно отправим локальные, лучше так чем ничего */ }
+    let remote = null;
+    try { remote = await fetchCloudSnapshot(); } catch (e) { /* если не удалось подтянуть — всё равно отправим локальные, лучше так чем ничего */ }
+    if (!remote) remote = { recipes: [], presence: [], deletedRecipeIds: [], chat: [], paintAlert: null, paintRequests: [], baseMultipliers: {}, lotMultipliers: {}, pigmentLotMultipliers: {} };
     const localList = await getAllLocalRecipes();
-    const merged = mergeRecipeLists(remoteList, localList, remoteDeletedIds);
-    const resp = await fetch(JSONBIN_BASE + '/' + cfg.binId, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Master-Key': cfg.masterKey },
-      body: JSON.stringify({ recipes: merged, presence: remotePresence, deletedRecipeIds: remoteDeletedIds, chat: remoteChat })
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const merged = mergeRecipeLists(remote.recipes, localList, remote.deletedRecipeIds);
+    remote.recipes = merged;
+    await pushCloudSnapshot(remote);
     if (db) {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      remoteDeletedIds.forEach(id => store.delete(id));
+      remote.deletedRecipeIds.forEach(id => store.delete(id));
       merged.forEach(r => store.put(r));
     }
-    setSyncStatus('🟢 Общая база подключена (ID: ' + cfg.binId + ') — отправлено ' + new Date().toLocaleTimeString('ru-RU'));
+    setSyncStatus('🟢 Общая база подключена (Google Sheets) — отправлено ' + new Date().toLocaleTimeString('ru-RU'));
     markSyncSuccess();
   } catch (e) {
     console.error(e);
-    addAIMessage('⚠️ Рецепт сохранён локально, но не отправился в общую базу — проверьте интернет, Ключ и ID базы в настройках синхронизации (☁️)');
+    addAIMessage('⚠️ Рецепт сохранён локально, но не отправился в общую базу — проверьте интернет и URL таблицы в настройках синхронизации (☁️)');
   }
 }
 
 // Автообновление: подтягиваем общую базу каждые 30 секунд, а также сразу
 // при возврате в приложение (со свёрнутого состояния) — чтобы новый
 // артикул от коллеги появился без ручного нажатия на 🔄.
-let jsonbinAutoSyncTimer = null;
-function startJsonbinAutoSync() {
-  if (jsonbinAutoSyncTimer) clearInterval(jsonbinAutoSyncTimer);
-  jsonbinAutoSyncTimer = setInterval(() => {
-    if (jsonbinConfig || loadJsonbinConfig()) syncFromJsonbin(false);
+let sheetDbAutoSyncTimer = null;
+function startSheetDbAutoSync() {
+  if (sheetDbAutoSyncTimer) clearInterval(sheetDbAutoSyncTimer);
+  sheetDbAutoSyncTimer = setInterval(() => {
+    if (sheetDbConfig || loadSheetDbConfig()) syncFromSheetDb(false);
   }, 30000);
 }
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && (jsonbinConfig || loadJsonbinConfig())) { syncFromJsonbin(false); sendPresenceHeartbeat(); }
+  if (!document.hidden && (sheetDbConfig || loadSheetDbConfig())) { syncFromSheetDb(false); sendPresenceHeartbeat(); }
 });
 
-function initJsonbinSync() {
-  const cfg = loadJsonbinConfig();
+function initSheetDbSync() {
+  const cfg = loadSheetDbConfig();
   if (!cfg) { setSyncStatus('🔴 Локально (без общей базы) — нажмите ☁️, чтобы подключить'); return; }
-  jsonbinConfig = cfg;
-  syncFromJsonbin(false);
-  startJsonbinAutoSync();
+  sheetDbConfig = cfg;
+  syncFromSheetDb(false);
+  startSheetDbAutoSync();
 }
 
 // ================== Чат колорист ↔ начальник смены ==================
@@ -3167,20 +3469,13 @@ async function clearChatHistory(silent) {
   saveChatLastNotified(chatLastNotifiedTs);
   updateChatBadge();
   renderChatMessages();
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  if (!cfg || !cfg.binId || !cfg.masterKey) { if (!silent) toast('История чата очищена (локально).'); return; }
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) { if (!silent) toast('История чата очищена (локально).'); return; }
   try {
-    const getResp = await fetch(JSONBIN_BASE + '/' + cfg.binId + '/latest', { headers: { 'X-Master-Key': cfg.masterKey } });
-    const data = getResp.ok ? await getResp.json() : { record: {} };
-    const remoteRecipes = (data.record && data.record.recipes) || [];
-    const presence = (data.record && data.record.presence) || [];
-    const deletedRecipeIds = (data.record && data.record.deletedRecipeIds) || [];
-    const putResp = await fetch(JSONBIN_BASE + '/' + cfg.binId, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Master-Key': cfg.masterKey },
-      body: JSON.stringify({ recipes: remoteRecipes, presence, deletedRecipeIds, chat: [] })
-    });
-    if (!putResp.ok) throw new Error('HTTP ' + putResp.status);
+    const remote = await fetchCloudSnapshot();
+    if (!remote) throw new Error('Нет ответа от таблицы');
+    remote.chat = [];
+    await pushCloudSnapshot(remote);
     if (!silent) toast('История чата очищена для всех.');
   } catch (e) {
     console.error(e);
@@ -3201,23 +3496,14 @@ async function deleteChatMessage(id) {
   if (!confirm('Удалить это сообщение?')) return;
   chatMessages = chatMessages.filter(m => m && m.id !== id);
   renderChatMessages();
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  if (!cfg || !cfg.binId || !cfg.masterKey) return;
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return;
   try {
-    const getResp = await fetch(JSONBIN_BASE + '/' + cfg.binId + '/latest', { headers: { 'X-Master-Key': cfg.masterKey } });
-    const data = getResp.ok ? await getResp.json() : { record: {} };
-    const remoteRecipes = (data.record && data.record.recipes) || [];
-    const presence = (data.record && data.record.presence) || [];
-    const deletedRecipeIds = (data.record && data.record.deletedRecipeIds) || [];
-    let chat = (data.record && data.record.chat) || [];
-    chat = chat.filter(m => m && m.id !== id);
-    const putResp = await fetch(JSONBIN_BASE + '/' + cfg.binId, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Master-Key': cfg.masterKey },
-      body: JSON.stringify({ recipes: remoteRecipes, presence, deletedRecipeIds, chat })
-    });
-    if (!putResp.ok) throw new Error('HTTP ' + putResp.status);
-    chatMessages = chat;
+    const remote = await fetchCloudSnapshot();
+    if (!remote) throw new Error('Нет ответа от таблицы');
+    remote.chat = (remote.chat || []).filter(m => m && m.id !== id);
+    await pushCloudSnapshot(remote);
+    chatMessages = remote.chat;
   } catch (e) {
     console.error(e);
     toast('Удалено локально, но не удалось удалить в общей базе — проверьте интернет.');
@@ -3237,8 +3523,8 @@ function updateChatBadge() {
 function renderChatMessages() {
   const wrap = document.getElementById('chat-messages');
   if (!wrap) return;
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  if (!cfg || !cfg.binId || !cfg.masterKey) {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) {
     wrap.innerHTML = '<p class="text-center text-[10px] text-gray-400 py-8 px-4 leading-relaxed">Чат работает через общую базу.<br>Откройте шапку ⌄ → ☁️ «Общая база» и подключитесь — тогда сообщения увидят и колорист, и начальник смены.</p>';
     return;
   }
@@ -3272,13 +3558,11 @@ function renderChatMessages() {
   wrap.scrollTop = wrap.scrollHeight;
 }
 async function pollChatOnce() {
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  if (!cfg || !cfg.binId || !cfg.masterKey) return;
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return;
   try {
-    const resp = await fetch(JSONBIN_BASE + '/' + cfg.binId + '/latest', { headers: { 'X-Master-Key': cfg.masterKey } });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    applyIncomingChat((data.record && data.record.chat) || []);
+    const remote = await fetchCloudSnapshot();
+    if (remote) applyIncomingChat(remote.chat);
   } catch (e) { /* тихо игнорируем — обновим на следующем цикле опроса */ }
   maybeAutoClearChat();
 }
@@ -3291,8 +3575,8 @@ function openChatModal() {
     return;
   }
   el.classList.remove('hidden');
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  const hasCfg = !!(cfg && cfg.binId && cfg.masterKey);
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  const hasCfg = !!(cfg && cfg.url);
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send-btn');
   if (input) input.disabled = !hasCfg;
@@ -3318,8 +3602,8 @@ function closeChatModal() {
 }
 async function sendChatMessage() {
   if (!currentUserProfile) { openLoginModal(); return; }
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  if (!cfg || !cfg.binId || !cfg.masterKey) { toast('Подключите общую базу (☁️ в шапке), чтобы коллега видел сообщения.'); return; }
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) { toast('Подключите общую базу (☁️ в шапке), чтобы коллега видел сообщения.'); return; }
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send-btn');
   const text = (input && input.value || '').trim();
@@ -3331,20 +3615,12 @@ async function sendChatMessage() {
   chatMessages = chatMessages.concat([msg]);
   renderChatMessages();
   try {
-    const getResp = await fetch(JSONBIN_BASE + '/' + cfg.binId + '/latest', { headers: { 'X-Master-Key': cfg.masterKey } });
-    const data = getResp.ok ? await getResp.json() : { record: {} };
-    const remoteRecipes = (data.record && data.record.recipes) || [];
-    const presence = (data.record && data.record.presence) || [];
-    const deletedRecipeIds = (data.record && data.record.deletedRecipeIds) || [];
-    let chat = (data.record && data.record.chat) || [];
-    chat = chat.filter(m => m && m.id !== msg.id).concat([msg]);
+    const remote = await fetchCloudSnapshot();
+    if (!remote) throw new Error('Нет ответа от таблицы');
+    let chat = (remote.chat || []).filter(m => m && m.id !== msg.id).concat([msg]);
     if (chat.length > CHAT_MAX_MESSAGES) chat = chat.slice(chat.length - CHAT_MAX_MESSAGES);
-    const putResp = await fetch(JSONBIN_BASE + '/' + cfg.binId, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Master-Key': cfg.masterKey },
-      body: JSON.stringify({ recipes: remoteRecipes, presence, deletedRecipeIds, chat })
-    });
-    if (!putResp.ok) throw new Error('HTTP ' + putResp.status);
+    remote.chat = chat;
+    await pushCloudSnapshot(remote);
     chatMessages = chat;
     chatLastReadTs = msg.ts;
     saveChatLastRead(chatLastReadTs);
@@ -3368,6 +3644,607 @@ function chatInputKeydown(event) {
     event.preventDefault();
     sendChatMessage();
   }
+}
+
+// ================== Оповещение "Краска налита" (колорист → печатник/начальник смены) ==================
+// Работает через ту же общую базу (Google Sheets), что рецепты/чат/presence — поле
+// "paintAlert" хранит { ts, name } последнего нажатия кнопки колористом.
+// Печатник и начальник смены опрашивают базу каждые 5 секунд (отдельно от
+// обычной синхронизации раз в 30с — тут важна скорость реакции) и, увидев
+// новую отметку не старше 2 минут, показывают полноэкранную плашку на
+// оставшееся до истечения 2 минут время — так все устройства гаснут
+// одновременно, даже если кто-то увидел уведомление на полминуты позже.
+const PAINT_ALERT_DURATION_MS = 2 * 60 * 1000;
+const PAINT_ALERT_LAST_SHOWN_KEY = 'colorist_paint_alert_last_shown';
+let paintAlertPollTimer = null;
+let paintAlertHideTimer = null;
+let shownPaintAlertTs = 0;
+let paintAlertAudioCtx = null;
+
+function loadShownPaintAlertTs() {
+  try { return parseInt(localStorage.getItem(PAINT_ALERT_LAST_SHOWN_KEY) || '0', 10) || 0; } catch (e) { return 0; }
+}
+function saveShownPaintAlertTs(ts) {
+  try { localStorage.setItem(PAINT_ALERT_LAST_SHOWN_KEY, String(ts)); } catch (e) {}
+}
+
+// Нажатие кнопки колористом сначала спрашивает номер линии (1-4) — печатник
+// каждой линии видит в личном кабинете только свою линию (см. saveLoginProfile
+// и applyIncomingPaintAlert), поэтому без номера линии оповещение некому
+// адресовать. Сама отправка идёт в announcePaintPoured(line).
+function openPaintLineModal() {
+  if (!currentUserProfile) { openLoginModal(); toast('Сначала войдите под именем — иначе печатник и начальник смены не увидят, кто налил краску.'); return; }
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) { toast('Подключите общую базу (☁️ в шапке) — иначе печатник и начальник смены не увидят уведомление.'); return; }
+  const el = document.getElementById('paint-line-modal');
+  if (el) el.classList.remove('hidden');
+}
+function closePaintLineModal() {
+  const el = document.getElementById('paint-line-modal');
+  if (el) el.classList.add('hidden');
+}
+function confirmPaintLine(line) {
+  closePaintLineModal();
+  announcePaintPoured(line);
+}
+
+// Отправляет отметку в общую базу. ВАЖНО (как и везде здесь): сначала
+// подтягиваем актуальную запись целиком и сохраняем её поля (рецепты/presence/
+// чат), иначе затрём чужие данные.
+async function announcePaintPoured(line) {
+  if (!currentUserProfile) { openLoginModal(); toast('Сначала войдите под именем — иначе печатник и начальник смены не увидят, кто налил краску.'); return; }
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) { toast('Подключите общую базу (☁️ в шапке) — иначе печатник и начальник смены не увидят уведомление.'); return; }
+  const btn = document.getElementById('paint-poured-btn');
+  if (btn) btn.disabled = true;
+  const alertObj = { ts: Date.now(), name: currentUserProfile.name, line: line || null };
+  try {
+    const remote = await fetchCloudSnapshot();
+    if (!remote) throw new Error('Нет ответа от таблицы');
+    remote.paintAlert = alertObj;
+    await pushCloudSnapshot(remote);
+    toast('✅ Отправлено — линия ' + line + ': печатник этой линии и начальник смены увидят «Краска налита» на весь экран');
+  } catch (e) {
+    console.error(e);
+    toast('Не удалось отправить уведомление — проверьте интернет и подключение общей базы (☁️).');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function startPaintAlertPolling() {
+  if (paintAlertPollTimer) return;
+  shownPaintAlertTs = loadShownPaintAlertTs();
+  checkPaintAlertOnce();
+  paintAlertPollTimer = setInterval(checkPaintAlertOnce, 5000);
+}
+function stopPaintAlertPolling() {
+  if (paintAlertPollTimer) { clearInterval(paintAlertPollTimer); paintAlertPollTimer = null; }
+}
+async function checkPaintAlertOnce() {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return;
+  try {
+    const remote = await fetchCloudSnapshot();
+    if (remote) {
+      applyIncomingPaintAlert(remote.paintAlert || null);
+      paintRequests = remote.paintRequests || [];
+      coloristLocks = remote.coloristLocks || {};
+      renderPaintRequestsSection();
+      renderColoristLockUI();
+      checkOverdueRequests();
+      checkCancelledOwnRequests();
+    }
+  } catch (e) { /* тихо игнорируем — повторим на следующем цикле опроса */ }
+}
+
+// ===== Заявки «Нужна краска»: печатник → колорист =====
+// Хранятся в общей базе (поле paintRequests) рядом с paintAlert. Цикл жизни
+// заявки: pending (только создана) → in_progress (колорист взял в работу,
+// необязательный шаг) → done (колорист нажал «Налил» — это же действие шлёт
+// обычный paintAlert печатнику этой линии) либо cancelled (отменена).
+let paintRequests = [];
+// Срочность заявки, выбранная печатником в форме перед отправкой (не хранится
+// между сессиями намеренно — при каждой новой заявке начинаем со "средне").
+let paintRequestUrgency = 'medium';
+function setPaintRequestUrgency(level) {
+  paintRequestUrgency = level;
+  renderPaintRequestUrgencyToggle();
+}
+function renderPaintRequestUrgencyToggle() {
+  const wrap = document.getElementById('paint-request-urgency-toggle');
+  if (!wrap) return;
+  wrap.querySelectorAll('button[data-urgency]').forEach(btn => {
+    const isActive = btn.dataset.urgency === paintRequestUrgency;
+    const activeColor = btn.dataset.urgency === 'high' ? 'bg-red-600 text-white' : (btn.dataset.urgency === 'medium' ? 'bg-amber-500 text-white' : 'bg-emerald-600 text-white');
+    btn.className = 'flex-1 py-2 rounded-xl text-[9px] font-black uppercase btn-active ' +
+      (isActive ? activeColor : 'bg-white text-gray-500 border border-gray-200');
+  });
+}
+function paintRequestUrgencyIcon(u) {
+  if (u === 'high') return '🔴';
+  if (u === 'low') return '🟢';
+  return '🟡';
+}
+function paintRequestUrgencyLabel(u) {
+  if (u === 'high') return 'Стоит линия';
+  if (u === 'low') return 'Не срочно';
+  return 'В течение смены';
+}
+// Очередь у колориста: сначала самые срочные (стоит линия), внутри одной
+// срочности — от самой старой заявки к новой, её и стоит брать первой.
+function sortPaintRequestsForQueue(list) {
+  const rank = { high: 0, medium: 1, low: 2 };
+  return list.slice().sort((a, b) => {
+    const ra = rank[a.urgency] ?? 1, rb = rank[b.urgency] ?? 1;
+    if (ra !== rb) return ra - rb;
+    return a.ts - b.ts;
+  });
+}
+// Если заявка висит в pending дольше этого времени — считаем линию
+// простаивающей и один раз сигналим начальнику смены (см. checkOverdueRequests).
+// Порог настраивается начальником смены (⏳ Порог простоя над очередью заявок)
+// и хранится в localStorage на его устройстве — по умолчанию 15 минут.
+const OVERDUE_THRESHOLD_KEY = 'colorist_overdue_threshold_min';
+const OVERDUE_THRESHOLD_DEFAULT_MIN = 15;
+function loadOverdueThresholdMin() {
+  const raw = parseInt(localStorage.getItem(OVERDUE_THRESHOLD_KEY), 10);
+  return (Number.isFinite(raw) && raw > 0) ? raw : OVERDUE_THRESHOLD_DEFAULT_MIN;
+}
+let PAINT_REQUEST_OVERDUE_MS = loadOverdueThresholdMin() * 60 * 1000;
+const PAINT_REQUEST_ALERTED_KEY = 'colorist_paint_request_alerted_ids';
+function loadAlertedRequestIds() {
+  try { return new Set(JSON.parse(localStorage.getItem(PAINT_REQUEST_ALERTED_KEY) || '[]')); }
+  catch (e) { return new Set(); }
+}
+function saveAlertedRequestIds(set) {
+  try { localStorage.setItem(PAINT_REQUEST_ALERTED_KEY, JSON.stringify(Array.from(set))); } catch (e) {}
+}
+let alertedOverdueRequestIds = loadAlertedRequestIds();
+// Уведомление печатнику, если колорист отменил его заявку — иначе печатник
+// узнавал бы об этом только заметив статус глазами в своём списке.
+const PAINT_REQUEST_CANCEL_ALERTED_KEY = 'colorist_paint_request_cancel_alerted_ids';
+function loadCancelAlertedRequestIds() {
+  try { return new Set(JSON.parse(localStorage.getItem(PAINT_REQUEST_CANCEL_ALERTED_KEY) || '[]')); }
+  catch (e) { return new Set(); }
+}
+function saveCancelAlertedRequestIds(set) {
+  try { localStorage.setItem(PAINT_REQUEST_CANCEL_ALERTED_KEY, JSON.stringify(Array.from(set))); } catch (e) {}
+}
+let alertedCancelledRequestIds = loadCancelAlertedRequestIds();
+
+// ===== Блокировка вкладки «Колорист» на время внесения данных =====
+// Хранится в общей базе (поле coloristLocks), ключ — номер линии (строка).
+// Заводить/снимать за собой может колорист, начальник смены и мастер УПП —
+// это те, кто реально вносит эталон/замес/рецепт. Снять ЧУЖУЮ блокировку
+// (если коллега забыл завершить) может кто угодно, КРОМЕ старшего печатника —
+// именно от печатника вкладка и защищается этим локом.
+const COLORIST_LOCK_LINES = [1, 2, 3, 4];
+const COLORIST_LOCK_EDITOR_ROLES = ['colorist', 'shift_lead', 'upp_master'];
+let coloristLocks = {};
+function canStartColoristLock() {
+  return !!(currentUserProfile && COLORIST_LOCK_EDITOR_ROLES.includes(currentUserProfile.role));
+}
+function canReleaseColoristLock() {
+  return !!(currentUserProfile && currentUserProfile.role !== 'senior_printer');
+}
+async function acquireColoristLock(line) {
+  if (!canStartColoristLock()) { toast('Начать внесение может только колорист, начальник смены или мастер УПП.'); return; }
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) { toast('Подключите общую базу (☁️ в шапке) — иначе блокировка не будет видна печатнику.'); return; }
+  try {
+    const remote = await fetchCloudSnapshot();
+    if (!remote) throw new Error('Нет ответа от таблицы');
+    remote.coloristLocks = remote.coloristLocks || {};
+    const existing = remote.coloristLocks[line];
+    if (existing && existing.active && existing.byName !== currentUserProfile.name) {
+      toast('⚠️ Линию ' + line + ' уже ведёт ' + existing.byName + ' — сначала уточните у коллеги.');
+      coloristLocks = remote.coloristLocks;
+      renderColoristLockUI();
+      return;
+    }
+    remote.coloristLocks[line] = { active: true, byName: currentUserProfile.name, byRole: currentUserProfile.role, ts: Date.now() };
+    await pushCloudSnapshot(remote);
+    coloristLocks = remote.coloristLocks;
+    renderColoristLockUI();
+    toast('🔒 Внесение по линии ' + line + ' начато — печатник этой линии временно не сможет менять данные.');
+  } catch (e) {
+    console.error(e);
+    toast('Не удалось поставить блокировку — проверьте интернет.');
+  }
+}
+async function releaseColoristLock(line) {
+  if (!canReleaseColoristLock()) { toast('Снять блокировку печатник не может.'); return; }
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return;
+  try {
+    const remote = await fetchCloudSnapshot();
+    if (!remote) throw new Error('Нет ответа от таблицы');
+    remote.coloristLocks = remote.coloristLocks || {};
+    remote.coloristLocks[line] = { active: false };
+    await pushCloudSnapshot(remote);
+    coloristLocks = remote.coloristLocks;
+    renderColoristLockUI();
+    toast('🔓 Линия ' + line + ' освобождена.');
+  } catch (e) {
+    console.error(e);
+    toast('Не удалось снять блокировку — проверьте интернет.');
+  }
+}
+function coloristLockElapsedLabel(ts) {
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return 'только что';
+  if (mins < 60) return mins + ' мин назад';
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return h + ' ч ' + m + ' мин назад';
+}
+function renderColoristLockUI() {
+  if (!currentUserProfile) return;
+  const role = currentUserProfile.role;
+  const panel = document.getElementById('colorist-lock-panel');
+  const overlay = document.getElementById('colorist-lock-overlay');
+
+  // Панель управления локами — видна всем, кроме печатника (у него вместо
+  // неё оверлей ниже). Начинать внесение могут только 3 роли-редактора,
+  // но освобождать чужой лок могут и остальные не-печатники (директор, нач. цеха).
+  if (panel) {
+    if (role === 'senior_printer') {
+      panel.classList.add('hidden');
+    } else {
+      panel.classList.remove('hidden');
+      const linesEl = document.getElementById('colorist-lock-lines');
+      if (linesEl) {
+        linesEl.innerHTML = COLORIST_LOCK_LINES.map(line => {
+          const lock = coloristLocks[line];
+          const active = lock && lock.active;
+          const mine = active && lock.byName === currentUserProfile.name;
+          let actionBtn = '';
+          if (active) {
+            actionBtn = mine
+              ? `<button onclick="releaseColoristLock(${line})" class="bg-emerald-600 text-white text-[9px] font-black uppercase px-3 py-1.5 rounded-lg">Завершить</button>`
+              : `<button onclick="releaseColoristLock(${line})" class="bg-red-100 text-red-700 text-[9px] font-black uppercase px-3 py-1.5 rounded-lg">Освободить</button>`;
+          } else if (canStartColoristLock()) {
+            actionBtn = `<button onclick="acquireColoristLock(${line})" class="bg-blue-600 text-white text-[9px] font-black uppercase px-3 py-1.5 rounded-lg">Начать внесение</button>`;
+          }
+          const status = active ? ('🔒 ' + escapeHtmlProd(lock.byName) + ' · ' + coloristLockElapsedLabel(lock.ts)) : '🔓 свободна';
+          return `<div class="flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2">
+            <div class="text-[10px] font-bold text-gray-700">Линия ${line} <span class="text-gray-400 font-normal">· ${status}</span></div>
+            ${actionBtn}
+          </div>`;
+        }).join('');
+      }
+    }
+  }
+
+  // Оверлей блокировки — виден только старшему печатнику, только пока
+  // ЕГО линия заблокирована, и полностью перекрывает клики по вкладке.
+  if (overlay) {
+    const myLine = role === 'senior_printer' ? currentUserProfile.line : null;
+    const lock = myLine ? coloristLocks[myLine] : null;
+    if (role === 'senior_printer' && myLine && lock && lock.active) {
+      overlay.classList.remove('hidden');
+      const meta = document.getElementById('colorist-lock-overlay-meta');
+      if (meta) meta.textContent = 'Линия ' + myLine + ' · вносит ' + lock.byName + ' (' + roleLabel(lock.byRole) + ') · ' + coloristLockElapsedLabel(lock.ts);
+    } else {
+      overlay.classList.add('hidden');
+    }
+  }
+}
+function checkCancelledOwnRequests() {
+  if (!currentUserProfile || currentUserProfile.role !== 'senior_printer' || !currentUserProfile.line) return;
+  let changed = false;
+  paintRequests.filter(r => r.status === 'cancelled' && String(r.line) === String(currentUserProfile.line)).forEach(r => {
+    if (!alertedCancelledRequestIds.has(r.id)) {
+      alertedCancelledRequestIds.add(r.id);
+      changed = true;
+      toast('❌ Заявка «' + r.article + '» отменена' + (r.cancelledBy ? ' — ' + r.cancelledBy : ''));
+      playPaintAlertSound();
+      firePushNotification('❌ Заявка на краску отменена', '«' + r.article + '»' + (r.cancelledBy ? ' — отменил(а) ' + r.cancelledBy : ''));
+    }
+  });
+  if (changed) saveCancelAlertedRequestIds(alertedCancelledRequestIds);
+}
+
+async function submitPaintRequest() {
+  if (!currentUserProfile || currentUserProfile.role !== 'senior_printer') { toast('Отправить заявку может только печатник, вошедший в личный кабинет со своей линией.'); return; }
+  if (!currentUserProfile.line) { toast('У вас не выбрана линия — зайдите заново в личный кабинет (👤) и укажите линию.'); return; }
+  const articleEl = document.getElementById('paint-request-article');
+  const noteEl = document.getElementById('paint-request-note');
+  const qtyEl = document.getElementById('paint-request-qty');
+  const article = (articleEl && articleEl.value || '').trim();
+  if (!article) { toast('Укажите артикул или название цвета для заявки.'); return; }
+  const note = (noteEl && noteEl.value || '').trim();
+  const qty = (qtyEl && qtyEl.value || '').trim();
+  const urgency = paintRequestUrgency || 'medium';
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) { toast('Подключите общую базу (☁️ в шапке) — иначе колорист не увидит заявку.'); return; }
+  const btn = document.getElementById('paint-request-submit-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const remote = await fetchCloudSnapshot();
+    if (!remote) throw new Error('Нет ответа от таблицы');
+    const req = {
+      id: 'pr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      ts: Date.now(),
+      line: currentUserProfile.line,
+      printerName: currentUserProfile.name,
+      article, note, qty, urgency,
+      status: 'pending'
+    };
+    remote.paintRequests = Array.isArray(remote.paintRequests) ? remote.paintRequests : [];
+    remote.paintRequests.push(req);
+    await pushCloudSnapshot(remote);
+    paintRequests = remote.paintRequests;
+    if (articleEl) articleEl.value = '';
+    if (noteEl) noteEl.value = '';
+    if (qtyEl) qtyEl.value = '';
+    paintRequestUrgency = 'medium';
+    renderPaintRequestUrgencyToggle();
+    renderPaintRequestsSection();
+    toast('✅ Заявка на «' + article + '» отправлена колористу — линия ' + currentUserProfile.line);
+  } catch (e) {
+    console.error(e);
+    toast('Не удалось отправить заявку — проверьте интернет и подключение общей базы (☁️).');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function updatePaintRequestStatus(id, newStatus) {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) { toast('Нет подключения к общей базе (☁️).'); return null; }
+  try {
+    const remote = await fetchCloudSnapshot();
+    if (!remote) throw new Error('Нет ответа от таблицы');
+    remote.paintRequests = Array.isArray(remote.paintRequests) ? remote.paintRequests : [];
+    const req = remote.paintRequests.find(r => r.id === id);
+    if (!req) { toast('Заявка уже не актуальна — список обновлён.'); paintRequests = remote.paintRequests; renderPaintRequestsSection(); return null; }
+    req.status = newStatus;
+    const who = currentUserProfile ? currentUserProfile.name : null;
+    if (newStatus === 'in_progress') { req.inProgressBy = who; req.inProgressTs = Date.now(); }
+    if (newStatus === 'done') { req.doneBy = who; req.doneTs = Date.now(); }
+    if (newStatus === 'cancelled') { req.cancelledBy = who; req.cancelledTs = Date.now(); }
+    await pushCloudSnapshot(remote);
+    paintRequests = remote.paintRequests;
+    renderPaintRequestsSection();
+    return req;
+  } catch (e) {
+    console.error(e);
+    toast('Не удалось обновить заявку — проверьте интернет.');
+    return null;
+  }
+}
+
+// «Налил» у колориста одновременно закрывает заявку и шлёт печатнику этой
+// линии обычный paintAlert («Краска налита, можно забирать») — одно нажатие
+// вместо двух отдельных действий для одного и того же события.
+async function fulfillPaintRequest(id) {
+  const req = paintRequests.find(r => r.id === id);
+  if (!req) return;
+  const updated = await updatePaintRequestStatus(id, 'done');
+  if (updated) announcePaintPoured(updated.line);
+}
+function cancelPaintRequest(id) {
+  if (!confirm('Отменить эту заявку?')) return;
+  updatePaintRequestStatus(id, 'cancelled');
+}
+
+function paintRequestElapsedLabel(ts) {
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return 'только что';
+  if (mins < 60) return mins + ' мин';
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return h + ' ч ' + m + ' мин';
+}
+function paintRequestStatusLabel(s) {
+  if (s === 'in_progress') return 'В работе';
+  if (s === 'done') return 'Готово';
+  if (s === 'cancelled') return 'Отменена';
+  return 'Ожидает';
+}
+function paintRequestStatusIcon(s) {
+  if (s === 'in_progress') return '🔵';
+  if (s === 'done') return '✅';
+  if (s === 'cancelled') return '⚪';
+  return '🟡';
+}
+
+// Печатник видит форму + свои последние заявки; колорист/начальник смены —
+// общую очередь по всем линиям, отсортированную от самой старой заявки —
+// её и стоит брать первой.
+function renderPaintRequestsSection() {
+  const wrap = document.getElementById('paint-requests-wrap');
+  if (!wrap) return;
+  const role = currentUserProfile && currentUserProfile.role;
+  if (!currentUserProfile) { wrap.classList.add('hidden'); updateColoristTabBadge(); return; }
+
+  if (role === 'senior_printer') {
+    wrap.classList.remove('hidden');
+    document.getElementById('paint-request-form').classList.remove('hidden');
+    document.getElementById('paint-request-queue').classList.add('hidden');
+    renderPaintRequestUrgencyToggle();
+    // Позиция в очереди считается в том же порядке, в каком заявки видит
+    // колорист (urgency, потом время) — только по активным (pending/in_progress).
+    const globalQueue = sortPaintRequestsForQueue(paintRequests.filter(r => r.status === 'pending' || r.status === 'in_progress'));
+    const mine = paintRequests.filter(r => String(r.line) === String(currentUserProfile.line))
+      .sort((a, b) => b.ts - a.ts);
+    const listEl = document.getElementById('paint-request-mine-list');
+    if (listEl) {
+      listEl.innerHTML = mine.length ? mine.map(r => {
+        const posIdx = (r.status === 'pending' || r.status === 'in_progress') ? globalQueue.findIndex(x => x.id === r.id) : -1;
+        const posLabel = posIdx === 0 ? 'вы первый в очереди' : (posIdx > 0 ? 'впереди вас: ' + posIdx : '');
+        const details = [paintRequestStatusLabel(r.status)];
+        if (r.qty) details.push(r.qty);
+        if (posLabel) details.push(posLabel);
+        details.push(paintRequestElapsedLabel(r.ts) + ' назад');
+        return `
+        <div class="flex items-center justify-between text-[10px] bg-gray-50 rounded-xl px-3 py-2">
+          <div class="min-w-0">
+            <div class="font-black text-gray-800 truncate">${paintRequestUrgencyIcon(r.urgency)} ${escapeHtmlProd(r.article)}</div>
+            <div class="text-gray-400">${details.join(' · ')}</div>
+          </div>
+          <span class="shrink-0">${paintRequestStatusIcon(r.status)}</span>
+        </div>`;
+      }).join('') : '<div class="text-[10px] text-gray-400 text-center py-2">Заявок пока нет</div>';
+    }
+  } else if (role === 'colorist' || role === 'shift_lead') {
+    wrap.classList.remove('hidden');
+    document.getElementById('paint-request-form').classList.add('hidden');
+    document.getElementById('paint-request-queue').classList.remove('hidden');
+    const thresholdBtn = document.getElementById('overdue-threshold-toggle-btn');
+    if (thresholdBtn) thresholdBtn.classList.toggle('hidden', role !== 'shift_lead');
+    const active = sortPaintRequestsForQueue(paintRequests.filter(r => r.status === 'pending' || r.status === 'in_progress'));
+    const listEl = document.getElementById('paint-request-queue-list');
+    if (listEl) {
+      listEl.innerHTML = active.length ? active.map(r => {
+        const overdue = (Date.now() - r.ts) > PAINT_REQUEST_OVERDUE_MS;
+        const isHigh = r.urgency === 'high';
+        const boxClass = overdue ? 'bg-red-50 border border-red-200' : (isHigh ? 'bg-red-50/60 border border-red-100' : 'bg-gray-50 border border-transparent');
+        const metaParts = [(overdue ? '⏳ Простой ' : 'ждёт ') + paintRequestElapsedLabel(r.ts)];
+        if (r.status === 'in_progress') metaParts.push('в работе');
+        metaParts.push('печатник ' + (r.printerName || ''));
+        if (r.qty) metaParts.push(escapeHtmlProd(r.qty));
+        if (r.note) metaParts.push(escapeHtmlProd(r.note));
+        return `
+        <div class="rounded-xl px-3 py-2.5 ${boxClass}">
+          <div class="flex items-center justify-between gap-2">
+            <div class="min-w-0">
+              <div class="font-black text-gray-800 text-[11px] truncate">${paintRequestUrgencyIcon(r.urgency)} ${escapeHtmlProd(r.article)} <span class="text-gray-400 font-bold">· линия ${escapeHtmlProd(String(r.line))}</span></div>
+              <div class="text-[9px] ${overdue ? 'text-red-500 font-black' : 'text-gray-400'}" title="${paintRequestUrgencyLabel(r.urgency)}">${metaParts.join(' · ')}</div>
+            </div>
+            <div class="flex gap-1 shrink-0">
+              ${r.status === 'pending' ? `<button onclick="updatePaintRequestStatus('${r.id}','in_progress')" class="bg-blue-600 text-white text-[9px] font-black uppercase px-2 py-1.5 rounded-lg">Взял</button>` : ''}
+              <button onclick="fulfillPaintRequest('${r.id}')" class="bg-green-600 text-white text-[9px] font-black uppercase px-2 py-1.5 rounded-lg">Налил</button>
+              <button onclick="cancelPaintRequest('${r.id}')" class="text-gray-300 text-[10px] px-1">✕</button>
+            </div>
+          </div>
+        </div>`;
+      }).join('') : '<div class="text-[10px] text-gray-400 text-center py-2">Заявок нет</div>';
+    }
+  } else {
+    wrap.classList.add('hidden');
+  }
+  updateColoristTabBadge();
+}
+
+// Красный бейдж-счётчик на иконке вкладки "Колорист" — сколько заявок
+// "Нужна краска" сейчас в очереди (pending + in_progress). Виден только
+// колористу и начальнику смены (это они разгребают очередь); печатнику и
+// остальным ролям бейдж не нужен и только сбивал бы с толку.
+function updateColoristTabBadge() {
+  const el = document.getElementById('tab-badge-colorist');
+  if (!el) return;
+  const role = currentUserProfile && currentUserProfile.role;
+  if (role !== 'colorist' && role !== 'shift_lead') { el.classList.add('hidden'); return; }
+  const count = paintRequests.filter(r => r.status === 'pending' || r.status === 'in_progress').length;
+  if (count > 0) {
+    el.textContent = count > 99 ? '99+' : String(count);
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+
+// Индикатор простоя линии: если заявка висит в pending дольше
+// PAINT_REQUEST_OVERDUE_MS — сигналим начальнику смены один раз на заявку
+// (id запоминается в localStorage), чтобы не повторять один и тот же сигнал
+// на каждом цикле опроса раз в 5 секунд.
+function toggleOverdueThresholdPanel() {
+  const panel = document.getElementById('overdue-threshold-panel');
+  if (!panel) return;
+  const willShow = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden');
+  if (willShow) {
+    const input = document.getElementById('overdue-threshold-input');
+    if (input) input.value = loadOverdueThresholdMin();
+  }
+}
+// Меняет порог "на лету": уже показанные сигналы о простое не повторяются
+// повторно (alertedOverdueRequestIds это помнит), а следующая проверка
+// (раз в 5с, см. checkPaintAlertOnce) сразу использует новое значение.
+function saveOverdueThreshold() {
+  const input = document.getElementById('overdue-threshold-input');
+  const mins = parseInt(input && input.value, 10);
+  if (!Number.isFinite(mins) || mins < 1 || mins > 180) { toast('Введите число минут от 1 до 180.'); return; }
+  localStorage.setItem(OVERDUE_THRESHOLD_KEY, String(mins));
+  PAINT_REQUEST_OVERDUE_MS = mins * 60 * 1000;
+  toast('✅ Порог простоя: ' + mins + ' мин');
+  renderPaintRequestsSection();
+}
+function checkOverdueRequests() {
+  if (!currentUserProfile || currentUserProfile.role !== 'shift_lead') return;
+  const now = Date.now();
+  let changed = false;
+  paintRequests.filter(r => r.status === 'pending' && (now - r.ts) > PAINT_REQUEST_OVERDUE_MS).forEach(r => {
+    if (!alertedOverdueRequestIds.has(r.id)) {
+      alertedOverdueRequestIds.add(r.id);
+      changed = true;
+      toast('⏳ Простой линии ' + r.line + ' — заявка «' + r.article + '» ждёт больше ' + Math.round(PAINT_REQUEST_OVERDUE_MS / 60000) + ' мин');
+      playPaintAlertSound();
+      firePushNotification('⏳ Простой линии ' + r.line, 'Заявка «' + r.article + '» от ' + (r.printerName || 'печатника') + ' до сих пор не в работе');
+    }
+  });
+  if (changed) saveAlertedRequestIds(alertedOverdueRequestIds);
+}
+function applyIncomingPaintAlert(alert) {
+  const role = currentUserProfile && currentUserProfile.role;
+  if (role !== 'shift_lead' && role !== 'senior_printer') return;
+  if (!alert || !alert.ts) return;
+  if (alert.ts <= shownPaintAlertTs) return; // это уведомление уже показывали на этом устройстве
+  // Печатник видит только оповещения со своей линии (выбранной при входе в
+  // личный кабинет) — начальник смены отвечает за все линии сразу, поэтому
+  // получает оповещение при любой линии.
+  if (role === 'senior_printer' && currentUserProfile.line && alert.line && String(alert.line) !== String(currentUserProfile.line)) {
+    shownPaintAlertTs = alert.ts;
+    saveShownPaintAlertTs(shownPaintAlertTs);
+    return;
+  }
+  const elapsed = Date.now() - alert.ts;
+  shownPaintAlertTs = alert.ts;
+  saveShownPaintAlertTs(shownPaintAlertTs);
+  if (elapsed < 0 || elapsed >= PAINT_ALERT_DURATION_MS) return; // окно показа уже прошло (открыли приложение слишком поздно) — не показываем устаревшее
+  showPaintAlert(alert, PAINT_ALERT_DURATION_MS - elapsed);
+}
+function showPaintAlert(alert, remainingMs) {
+  const panel = document.getElementById('paint-poured-alert');
+  if (!panel) return;
+  const lineEl = document.getElementById('paint-poured-alert-line');
+  if (lineEl) lineEl.textContent = alert.line ? ('Линия ' + alert.line) : '';
+  const meta = document.getElementById('paint-poured-alert-meta');
+  if (meta) meta.textContent = (alert.name ? 'Налил: ' + alert.name + ' · ' : '') + new Date(alert.ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  panel.classList.remove('hidden');
+  playPaintAlertSound();
+  speak('Краска налита' + (alert.line ? ', линия ' + alert.line : '') + ', можно забирать' + (alert.name ? ', колорист ' + alert.name : ''));
+  firePushNotification('🎨 Краска налита' + (alert.line ? ' — линия ' + alert.line : ''), 'Можно забирать' + (alert.name ? ' — ' + alert.name : ''));
+  if (paintAlertHideTimer) clearTimeout(paintAlertHideTimer);
+  paintAlertHideTimer = setTimeout(hidePaintAlert, Math.max(0, remainingMs));
+}
+function hidePaintAlert() {
+  const panel = document.getElementById('paint-poured-alert');
+  if (panel) panel.classList.add('hidden');
+  if (paintAlertHideTimer) { clearTimeout(paintAlertHideTimer); paintAlertHideTimer = null; }
+}
+// Громкий звуковой сигнал + вибрация, чтобы печатник/начальник смены не
+// обязаны были постоянно смотреть на экран — как playVisionAlert() у
+// контроля печати, но своя копия, чтобы не задевать состояние того модуля.
+function playPaintAlertSound() {
+  try {
+    if (!paintAlertAudioCtx) paintAlertAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (paintAlertAudioCtx.state === 'suspended') paintAlertAudioCtx.resume().catch(() => {});
+    [[0, 0.18], [0.24, 0.18], [0.48, 0.18]].forEach(([delay, dur]) => {
+      const osc = paintAlertAudioCtx.createOscillator();
+      const gain = paintAlertAudioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 1000;
+      osc.connect(gain); gain.connect(paintAlertAudioCtx.destination);
+      const t0 = paintAlertAudioCtx.currentTime + delay;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.9, t0 + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.start(t0); osc.stop(t0 + dur + 0.03);
+    });
+  } catch (e) {}
+  if (navigator.vibrate) { try { navigator.vibrate([200, 100, 200, 100, 200]); } catch (e) {} }
 }
 
 function updateVoiceRate(val) {
@@ -3738,6 +4615,54 @@ function loadBaseMultipliers() {
 
 function saveBaseMultipliers() {
   try { localStorage.setItem(BASE_MULTIPLIER_KEY, JSON.stringify(baseMultipliers)); } catch (e) {}
+  pushMultipliersToCloud();
+}
+
+// ===== Синхронизация калибровочных матриц (коэффициенты основ/лотов) с общей базой =====
+// Матрицы правит любой колорист, откалибровавший конкретную основу/лот на
+// практике — поэтому при сохранении именно ЛОКАЛЬНОЕ значение считается
+// самым свежим и побеждает при слиянии с облаком (а не наоборот, как с
+// рецептами, где выигрывает объединение по id). При обычной синхронизации
+// (syncFromSheetDb/heartbeat) действует обратное правило — см.
+// applyIncomingMultipliers() ниже.
+let multipliersPushTimer = null;
+function pushMultipliersToCloud() {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return;
+  // Лёгкий дебаунс — при перетаскивании ползунка коэффициента save-функция
+  // может вызываться много раз подряд, не нужно слать запрос на каждый шаг.
+  if (multipliersPushTimer) clearTimeout(multipliersPushTimer);
+  multipliersPushTimer = setTimeout(async () => {
+    try {
+      const remote = await fetchCloudSnapshot();
+      if (!remote) return;
+      remote.baseMultipliers = { ...(remote.baseMultipliers || {}), ...baseMultipliers };
+      remote.lotMultipliers = { ...(remote.lotMultipliers || {}), ...lotMultipliers };
+      remote.pigmentLotMultipliers = { ...(remote.pigmentLotMultipliers || {}), ...pigmentLotMultipliers };
+      await pushCloudSnapshot(remote);
+    } catch (e) { console.error(e); }
+  }, 600);
+}
+
+// Вызывается при обычной синхронизации (не после локального редактирования):
+// подтягивает матрицы коллег из облака и применяет их локально, если там
+// есть значения (объединяем — облако может содержать коэффициенты для
+// основ/лотов, которых на этом устройстве ещё не было).
+function applyIncomingMultipliers(remote) {
+  if (!remote) return;
+  if (remote.baseMultipliers && Object.keys(remote.baseMultipliers).length) {
+    baseMultipliers = { ...DEFAULT_BASE_MULTIPLIERS, ...baseMultipliers, ...remote.baseMultipliers };
+    try { localStorage.setItem(BASE_MULTIPLIER_KEY, JSON.stringify(baseMultipliers)); } catch (e) {}
+    if (typeof renderBaseStrengthNote === 'function') renderBaseStrengthNote();
+  }
+  if (remote.lotMultipliers && Object.keys(remote.lotMultipliers).length) {
+    lotMultipliers = { ...lotMultipliers, ...remote.lotMultipliers };
+    try { localStorage.setItem(LOT_MULTIPLIER_KEY, JSON.stringify(lotMultipliers)); } catch (e) {}
+  }
+  if (remote.pigmentLotMultipliers && Object.keys(remote.pigmentLotMultipliers).length) {
+    pigmentLotMultipliers = { ...pigmentLotMultipliers, ...remote.pigmentLotMultipliers };
+    try { localStorage.setItem(PIGMENT_LOT_MULTIPLIER_KEY, JSON.stringify(pigmentLotMultipliers)); } catch (e) {}
+  }
 }
 
 function currentBaseKey() {
@@ -3766,6 +4691,7 @@ function loadLotMultipliers() {
 }
 function saveLotMultipliers() {
   try { localStorage.setItem(LOT_MULTIPLIER_KEY, JSON.stringify(lotMultipliers)); } catch (e) {}
+  pushMultipliersToCloud();
 }
 function lotKey(baseKey, lot) {
   return baseKey + '::' + (lot || '').trim().toLowerCase();
@@ -3904,6 +4830,7 @@ function loadPigmentLotMultipliers() {
 }
 function savePigmentLotMultipliers() {
   try { localStorage.setItem(PIGMENT_LOT_MULTIPLIER_KEY, JSON.stringify(pigmentLotMultipliers)); } catch (e) {}
+  pushMultipliersToCloud();
 }
 function pigmentLotKey(pigmentKey, lot) {
   return pigmentKey + '::' + (lot || '').trim().toLowerCase();
@@ -5913,10 +6840,10 @@ async function seedInitialRecipesIfEmpty() {
     seed.forEach(r => store.put(r));
     await new Promise(resolve => { tx.oncomplete = resolve; tx.onerror = resolve; });
     // Если общая база уже подключена (в т.ч. по умолчанию, см.
-    // JSONBIN_DEFAULT_CONFIG) — сразу отправляем эти записи в облако, слив
+    // SHEETDB_DEFAULT_CONFIG) — сразу отправляем эти записи в облако, слив
     // с тем, что там уже может быть, чтобы они стали видны и с других
     // устройств, а не только локально на этом.
-    if (jsonbinConfig || loadJsonbinConfig()) pushToJsonbin();
+    if (sheetDbConfig || loadSheetDbConfig()) pushToSheetDb();
   } catch (e) { console.error('Не удалось добавить начальные рецепты библиотеки:', e); }
 }
 
@@ -7777,6 +8704,7 @@ function switchView(view) {
   const vision = document.getElementById('view-vision');
   const pigments = document.getElementById('view-pigments');
   const help = document.getElementById('view-help');
+  const dashboard = document.getElementById('view-dashboard');
   const btnColorist = document.getElementById('tab-btn-colorist');
   const btnHistory = document.getElementById('tab-btn-history');
   const btnStats = document.getElementById('tab-btn-stats');
@@ -7786,11 +8714,16 @@ function switchView(view) {
   const btnVision = document.getElementById('tab-btn-vision');
   const btnPigments = document.getElementById('tab-btn-pigments');
   const btnHelp = document.getElementById('tab-btn-help');
+  const btnDashboard = document.getElementById('tab-btn-dashboard');
   const activeClasses = ['bg-blue-700', 'text-white'];
   const inactiveClasses = ['bg-gray-100', 'text-gray-500'];
-  [colorist, history, stats, preview, learning, production, vision, pigments, help].forEach(v => v && v.classList.add('hidden'));
-  [btnColorist, btnHistory, btnStats, btnPreview, btnLearning, btnProduction, btnVision, btnPigments, btnHelp].forEach(b => { if (b) { b.classList.remove(...activeClasses); b.classList.add(...inactiveClasses); } });
-  if (view === 'help') {
+  [colorist, history, stats, preview, learning, production, vision, pigments, help, dashboard].forEach(v => v && v.classList.add('hidden'));
+  [btnColorist, btnHistory, btnStats, btnPreview, btnLearning, btnProduction, btnVision, btnPigments, btnHelp, btnDashboard].forEach(b => { if (b) { b.classList.remove(...activeClasses); b.classList.add(...inactiveClasses); } });
+  if (view === 'dashboard') {
+    dashboard.classList.remove('hidden');
+    btnDashboard.classList.remove(...inactiveClasses); btnDashboard.classList.add(...activeClasses);
+    renderDashboardView();
+  } else if (view === 'help') {
     help.classList.remove('hidden');
     btnHelp.classList.remove(...inactiveClasses); btnHelp.classList.add(...activeClasses);
     renderHelpSections();
@@ -7828,6 +8761,7 @@ function switchView(view) {
   } else {
     colorist.classList.remove('hidden');
     btnColorist.classList.remove(...inactiveClasses); btnColorist.classList.add(...activeClasses);
+    renderColoristLockUI();
   }
 }
 
@@ -7864,7 +8798,10 @@ const HELP_SECTIONS = [
       { q: '📜 История заказов клиента', a: 'По имени заказчика показывает все прошлые артикулы и цвета для него — не нужно спрашивать заново, что красили в прошлый раз.' },
       { q: 'Сохранить / 🔁 Повторить как вчера', a: '«Сохранить» кладёт текущий рецепт в библиотеку (для истории, статистики и подсказок). «Повторить как вчера» подставляет последний сохранённый рецепт этого артикула целиком, без пересчёта с нуля.' },
       { q: '✅ Сдать партию (чек-лист)', a: 'Открывает финальный чек-лист перед тем, как считать партию готовой и сданной.' },
-      { q: 'WhatsApp / Telegram / Печать', a: 'Отправляет текущий рецепт в мессенджер или готовит его к печати/сохранению как PDF — без необходимости переписывать вручную.' }
+      { q: 'WhatsApp / Telegram / Печать', a: 'Отправляет текущий рецепт в мессенджер или готовит его к печати/сохранению как PDF — без необходимости переписывать вручную.' },
+      { q: '🧴 Нужна краска (заявка от печатника)', a: 'Старший печатник заказывает краску прямо на этой вкладке: артикул/цвет, количество (напр. «5 кг»), комментарий и срочность — 🟢 не срочно, 🟡 в течение смены, 🔴 стоит линия. Заявка уходит в общую очередь колористу и начальнику смены. Печатник видит статус своей заявки, сколько заявок ждёт впереди, и получает уведомление на весь экран, когда краска налита — или короткое уведомление, если заявку отменили.' },
+      { q: 'Очередь заявок у колориста / начальника смены', a: 'Показывает все активные заявки от печатников по всем линиям. Заявки с срочностью 🔴 «Стоит линия» всегда идут первыми, внутри одной срочности — от самой давней. Просроченные (дольше порога простоя) подсвечиваются красным. «Взял» переводит заявку в работу, «Налил» одновременно закрывает заявку и шлёт печатнику алерт «Краска налита».' },
+      { q: '🔒 Внесение данных по линиям', a: 'Панель вверху вкладки: колорист, начальник смены или мастер УПП нажимают «Начать внесение» по своей линии перед тем, как вносить эталон/замес/рецепт. Пока лок активен, старший печатник этой линии видит вместо формы экран «Идёт внесение данных» и не может ничего менять — заказ краски при этом продолжает работать как обычно. По окончании нажимается «Завершить»; если коллега забыл это сделать, снять чужую блокировку может кто угодно, кроме старшего печатника, кнопкой «Освободить». Другие линии эта блокировка не затрагивает.' }
     ]
   },
   {
@@ -9935,6 +10872,311 @@ function escapeHtmlProd(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ================== 📊 Панель: ролевые фичи ==================
+// Одна вкладка, но показывает разный набор блоков в зависимости от роли
+// вошедшего пользователя (currentUserProfile.role). Данные хранятся в
+// localStorage — так же, как остальные небольшие списки в этом приложении
+// (алерты по краске, история коррекций и т.п.), отдельного object store не
+// заводим ради нескольких небольших списков.
+const MAINT_REQUESTS_KEY = 'colorist_maintenance_requests';
+const PRELAUNCH_LOG_KEY = 'colorist_prelaunch_checklist_log';
+const PRODUCTION_ORDERS_KEY = 'colorist_production_orders';
+const PRELAUNCH_ITEMS = [
+  'Материал/основа заправлена и натяжение отрегулировано',
+  'Краска/паста налита, вязкость проверена',
+  'Ракель и валы очищены, зазор выставлен',
+  'Клише/форма закреплена, совпадение по меткам проверено',
+  'Сушка/тиснение выведены на рабочий режим',
+  'Первые метры сверены с эталоном образца'
+];
+
+function loadMaintRequests() {
+  try { return JSON.parse(localStorage.getItem(MAINT_REQUESTS_KEY) || '[]'); } catch (e) { return []; }
+}
+function saveMaintRequests(list) {
+  try { localStorage.setItem(MAINT_REQUESTS_KEY, JSON.stringify(list)); } catch (e) {}
+}
+function loadPrelaunchLog() {
+  try { return JSON.parse(localStorage.getItem(PRELAUNCH_LOG_KEY) || '[]'); } catch (e) { return []; }
+}
+function savePrelaunchLog(list) {
+  try { localStorage.setItem(PRELAUNCH_LOG_KEY, JSON.stringify(list)); } catch (e) {}
+}
+function loadProductionOrders() {
+  try { return JSON.parse(localStorage.getItem(PRODUCTION_ORDERS_KEY) || '[]'); } catch (e) { return []; }
+}
+function saveProductionOrders(list) {
+  try { localStorage.setItem(PRODUCTION_ORDERS_KEY, JSON.stringify(list)); } catch (e) {}
+}
+
+// Точка входа: показывает только тот блок(и), что относится к роли текущего
+// пользователя, и наполняет его данными.
+function renderDashboardView() {
+  const sections = {
+    printer: document.getElementById('dash-printer-section'),
+    lead: document.getElementById('dash-leadview-section'),
+    kpi: document.getElementById('dash-kpi-section'),
+    orders: document.getElementById('dash-orders-section')
+  };
+  const noRole = document.getElementById('dash-no-role');
+  Object.values(sections).forEach(s => s && s.classList.add('hidden'));
+  const role = currentUserProfile && currentUserProfile.role;
+  if (!role) { if (noRole) noRole.classList.remove('hidden'); return; }
+  if (noRole) noRole.classList.add('hidden');
+
+  if (role === 'senior_printer') {
+    sections.printer.classList.remove('hidden');
+    renderPrelaunchChecklist();
+    renderMyMaintList();
+  } else if (role === 'shift_lead') {
+    sections.lead.classList.remove('hidden');
+    renderLinesOverview();
+    renderAllMaintList();
+  } else if (role === 'production_director' || role === 'shop_chief') {
+    sections.kpi.classList.remove('hidden');
+    renderKpiDashboard();
+  } else if (role === 'upp_master') {
+    sections.orders.classList.remove('hidden');
+    renderOrdersList();
+  }
+  // Колористу отдельная панель пока не нужна — у него уже есть своя главная
+  // вкладка и заявки "нужна краска" на ней же.
+}
+
+// ---------- Печатник / ст.печатник: чек-лист приладки ----------
+function renderPrelaunchChecklist() {
+  const wrap = document.getElementById('dash-checklist-items');
+  if (wrap) {
+    wrap.innerHTML = PRELAUNCH_ITEMS.map((item, i) => `
+      <label class="flex items-center gap-2 text-[11px] font-bold text-gray-700 bg-gray-50 rounded-xl p-2.5">
+        <input type="checkbox" id="dash-check-${i}" class="w-4 h-4 accent-emerald-600 shrink-0">
+        <span>${item}</span>
+      </label>`).join('');
+  }
+  const log = loadPrelaunchLog().filter(l => l.name === (currentUserProfile && currentUserProfile.name)).sort((a, b) => b.ts - a.ts).slice(0, 3);
+  const logEl = document.getElementById('dash-checklist-log');
+  if (logEl) {
+    logEl.innerHTML = log.length ? '<div class="text-[9px] font-black uppercase text-gray-400">Последние сдачи</div>' + log.map(l => `<div class="text-[9px] text-gray-500">${new Date(l.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} — ${l.checkedCount}/${PRELAUNCH_ITEMS.length} пунктов${l.line ? ', линия ' + l.line : ''}</div>`).join('') : '';
+  }
+}
+function submitPrelaunchChecklist() {
+  if (!currentUserProfile) { toast('Сначала войдите в личный кабинет.'); return; }
+  const checkedCount = PRELAUNCH_ITEMS.reduce((n, _, i) => n + ((document.getElementById('dash-check-' + i) || {}).checked ? 1 : 0), 0);
+  const log = loadPrelaunchLog();
+  log.push({ id: 'pl' + Date.now(), ts: Date.now(), name: currentUserProfile.name, line: currentUserProfile.line || null, checkedCount, total: PRELAUNCH_ITEMS.length });
+  savePrelaunchLog(log);
+  logCorrection(`Сдал чек-лист приладки (${checkedCount}/${PRELAUNCH_ITEMS.length})${currentUserProfile.line ? ', линия ' + currentUserProfile.line : ''}`, 'shift');
+  toast(checkedCount === PRELAUNCH_ITEMS.length ? 'Чек-лист сдан полностью ✅' : `Чек-лист сдан (${checkedCount}/${PRELAUNCH_ITEMS.length}) — начальник смены увидит незакрытые пункты`);
+  renderPrelaunchChecklist();
+}
+
+// ---------- Печатник: заявка на ремонт/запчасть (с фото) ----------
+let dashMaintPhotoData = null;
+function handleMaintPhotoSelect(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    dashMaintPhotoData = reader.result;
+    const prev = document.getElementById('dash-maint-photo-preview');
+    if (prev) { prev.classList.remove('hidden'); prev.innerHTML = `<img src="${dashMaintPhotoData}" class="w-16 h-16 rounded-xl object-cover border border-white/20">`; }
+  };
+  reader.readAsDataURL(file);
+}
+function submitMaintenanceRequest() {
+  if (!currentUserProfile) { toast('Сначала войдите в личный кабинет.'); return; }
+  const textEl = document.getElementById('dash-maint-text');
+  const text = (textEl.value || '').trim();
+  if (!text) { toast('Опишите проблему.'); return; }
+  const urgency = document.getElementById('dash-maint-urgency').value;
+  const list = loadMaintRequests();
+  list.push({
+    id: 'mr' + Date.now(), ts: Date.now(), name: currentUserProfile.name, line: currentUserProfile.line || null,
+    text, urgency, photo: dashMaintPhotoData || null, status: 'open'
+  });
+  saveMaintRequests(list);
+  logCorrection(`Заявка на ремонт: ${text}${currentUserProfile.line ? ' (линия ' + currentUserProfile.line + ')' : ''}`, 'shift');
+  textEl.value = '';
+  dashMaintPhotoData = null;
+  const prev = document.getElementById('dash-maint-photo-preview');
+  if (prev) { prev.classList.add('hidden'); prev.innerHTML = ''; }
+  toast('Заявка отправлена начальнику смены');
+  renderMyMaintList();
+}
+function maintUrgencyLabel(u) {
+  return u === 'high' ? '🔴 Срочно' : (u === 'low' ? '🟢 Не срочно' : '🟡 В течение смены');
+}
+function renderMyMaintList() {
+  const el = document.getElementById('dash-my-maint-list');
+  if (!el || !currentUserProfile) return;
+  const mine = loadMaintRequests().filter(r => r.name === currentUserProfile.name).sort((a, b) => b.ts - a.ts);
+  el.innerHTML = mine.length ? mine.map(maintRequestCardHtml).join('') : '<p class="text-gray-400 text-center py-4 text-xs">Заявок пока нет</p>';
+}
+function maintRequestCardHtml(r) {
+  return `<div class="bg-white border border-gray-100 rounded-2xl p-3 flex gap-2 items-start">
+    ${r.photo ? `<img src="${r.photo}" class="w-12 h-12 rounded-xl object-cover border border-gray-200 shrink-0">` : ''}
+    <div class="flex-1 min-w-0">
+      <div class="flex items-center gap-1.5 flex-wrap mb-0.5">
+        <span class="text-[8px] font-black uppercase ${r.status === 'open' ? 'text-red-600' : 'text-emerald-600'}">${r.status === 'open' ? 'Открыта' : 'Закрыта'}</span>
+        <span class="text-[8px] font-black">${maintUrgencyLabel(r.urgency)}</span>
+      </div>
+      <div class="text-[11px] text-gray-700 font-bold">${escapeHtmlProd(r.text)}</div>
+      <div class="text-[9px] text-gray-400 mt-0.5">${escapeHtmlProd(r.name)}${r.line ? ', линия ' + escapeHtmlProd(r.line) : ''} · ${new Date(r.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
+    </div>
+    ${r.status === 'open' ? `<button onclick="resolveMaintRequest('${r.id}')" class="text-[9px] bg-emerald-50 text-emerald-700 px-2 py-1.5 rounded-xl font-black shrink-0">✔️</button>` : ''}
+  </div>`;
+}
+function resolveMaintRequest(id) {
+  const list = loadMaintRequests();
+  const req = list.find(r => r.id === id);
+  if (req) req.status = 'closed';
+  saveMaintRequests(list);
+  renderAllMaintList();
+  renderMyMaintList();
+}
+
+// ---------- Начальник смены: все линии сразу + автосводка ----------
+function renderLinesOverview() {
+  const el = document.getElementById('dash-lines-overview');
+  if (!el) return;
+  const openMaint = loadMaintRequests().filter(r => r.status === 'open');
+  const online = (typeof currentOnlinePresence !== 'undefined' && currentOnlinePresence) || [];
+  const printers = online.filter(p => p.role === 'senior_printer');
+  if (!printers.length) {
+    el.innerHTML = '<p class="text-gray-400 text-xs">Сейчас на связи нет ни одного печатника.</p>';
+  } else {
+    el.innerHTML = printers.map(p => {
+      const lineMaint = openMaint.filter(r => r.line === p.line);
+      return `<div class="flex items-center justify-between bg-gray-50 rounded-xl p-2.5">
+        <div class="text-[11px] font-bold text-gray-700">🖨 Линия ${escapeHtmlProd(p.line || '?')} — ${escapeHtmlProd(p.name)}</div>
+        ${lineMaint.length ? `<span class="text-[9px] font-black text-red-600">${lineMaint.length} заявка(и)</span>` : '<span class="text-[9px] font-black text-emerald-600">без заявок</span>'}
+      </div>`;
+    }).join('');
+  }
+}
+function renderAllMaintList() {
+  const el = document.getElementById('dash-all-maint-list');
+  const countEl = document.getElementById('dash-maint-open-count');
+  if (!el) return;
+  const all = loadMaintRequests().sort((a, b) => b.ts - a.ts);
+  const open = all.filter(r => r.status === 'open');
+  if (countEl) countEl.textContent = open.length ? `${open.length} открыто` : '';
+  el.innerHTML = all.length ? all.slice(0, 30).map(maintRequestCardHtml).join('') : '<p class="text-gray-400 text-center py-4 text-xs">Заявок пока нет</p>';
+}
+async function buildShiftAutoSummary() {
+  const shifts = await getAllShifts();
+  const active = shifts.find(s => !s.endTs);
+  const startTs = active ? active.startTs : (Date.now() - 8 * 3600000);
+  const batches = await getAllProductionBatches();
+  const batchesThisShift = batches.filter(b => b.id >= startTs);
+  const defects = await getAllVisionDefects();
+  const defectsThisShift = defects.filter(d => d.ts >= startTs && !d.falsePositive);
+  const maint = loadMaintRequests().filter(r => r.ts >= startTs);
+  const defectByType = {};
+  defectsThisShift.forEach(d => { defectByType[d.type] = (defectByType[d.type] || 0) + 1; });
+  const defectLines = Object.keys(defectByType).map(t => `  • ${(VISION_TYPE_INFO[t] || {}).label || t}: ${defectByType[t]}`).join('\n');
+  const lines = [
+    `Сводка смены на ${new Date().toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`,
+    `Партий сделано: ${batchesThisShift.length}`,
+    `Брак зафиксирован (CV): ${defectsThisShift.length}${defectLines ? '\n' + defectLines : ''}`,
+    `Заявки на ремонт за смену: ${maint.length}${maint.length ? ' (открыто сейчас: ' + loadMaintRequests().filter(r => r.status === 'open').length + ')' : ''}`
+  ];
+  const ta = document.getElementById('dash-shift-summary');
+  if (ta) { ta.classList.remove('hidden'); ta.value = lines.join('\n'); ta.select(); }
+}
+
+// ---------- Директор / начальник цеха: KPI по браку ----------
+function sectionFromDefectCause(type) {
+  const cause = ((VISION_TYPE_INFO[type] || {}).cause || '').toLowerCase();
+  if (cause.indexOf('ольбрихт') !== -1) return 'Ольбрихт (печать)';
+  if (cause.indexOf('сушк') !== -1) return 'Сушка';
+  if (cause.indexOf('тиснен') !== -1) return 'Тиснение';
+  if (cause.indexOf('смотк') !== -1) return 'Смотка';
+  if (cause.indexOf('основ') !== -1) return 'Подготовка основы';
+  return 'Не определено';
+}
+async function renderKpiDashboard() {
+  const summaryEl = document.getElementById('dash-kpi-summary');
+  const bySectionEl = document.getElementById('dash-kpi-by-section');
+  const byTypeEl = document.getElementById('dash-kpi-by-type');
+  if (!summaryEl) return;
+  const periodDays = parseInt((document.getElementById('dash-kpi-period') || {}).value || '7', 10);
+  const since = Date.now() - periodDays * 24 * 3600000;
+  const all = await getAllVisionDefects();
+  const period = all.filter(d => d.ts >= since && !d.falsePositive);
+  if (!period.length) {
+    summaryEl.textContent = 'За выбранный период брак не зафиксирован (или контроль брака не использовался).';
+    bySectionEl.innerHTML = ''; byTypeEl.innerHTML = '';
+    return;
+  }
+  summaryEl.textContent = `Всего зафиксировано: ${period.length} случаев брака за ${periodDays === 1 ? 'сутки' : periodDays + ' дней'}.`;
+
+  const bySection = {};
+  const byType = {};
+  period.forEach(d => {
+    const sec = sectionFromDefectCause(d.type);
+    bySection[sec] = (bySection[sec] || 0) + 1;
+    byType[d.type] = (byType[d.type] || 0) + 1;
+  });
+  const maxSection = Math.max(...Object.values(bySection));
+  bySectionEl.innerHTML = Object.keys(bySection).sort((a, b) => bySection[b] - bySection[a]).map(sec => `
+    <div class="space-y-0.5">
+      <div class="flex justify-between text-[10px] font-bold text-gray-600"><span>${sec}</span><span>${bySection[sec]}</span></div>
+      <div class="h-2 bg-gray-100 rounded-full overflow-hidden"><div class="h-full bg-rose-500 rounded-full" style="width:${Math.round(bySection[sec] / maxSection * 100)}%"></div></div>
+    </div>`).join('');
+
+  const maxType = Math.max(...Object.values(byType));
+  byTypeEl.innerHTML = Object.keys(byType).sort((a, b) => byType[b] - byType[a]).map(t => {
+    const info = VISION_TYPE_INFO[t] || { label: t };
+    return `<div class="space-y-0.5">
+      <div class="flex justify-between text-[10px] font-bold text-gray-600"><span>${info.icon || ''} ${info.label}</span><span>${byType[t]}</span></div>
+      <div class="h-2 bg-gray-100 rounded-full overflow-hidden"><div class="h-full bg-amber-500 rounded-full" style="width:${Math.round(byType[t] / maxType * 100)}%"></div></div>
+    </div>`;
+  }).join('');
+}
+
+// ---------- Мастер УПП: план заказов по линиям ----------
+function addProductionOrder() {
+  const article = (document.getElementById('dash-order-article').value || '').trim();
+  const qty = (document.getElementById('dash-order-qty').value || '').trim();
+  const deadline = document.getElementById('dash-order-deadline').value || '';
+  const line = (document.getElementById('dash-order-line').value || '').trim();
+  if (!article) { toast('Укажите артикул заказа.'); return; }
+  const list = loadProductionOrders();
+  list.push({ id: 'ord' + Date.now(), ts: Date.now(), article, qty, deadline, line, status: 'planned' });
+  saveProductionOrders(list);
+  ['dash-order-article', 'dash-order-qty', 'dash-order-deadline', 'dash-order-line'].forEach(id => { document.getElementById(id).value = ''; });
+  toast('Заказ добавлен в план');
+  renderOrdersList();
+}
+const ORDER_STATUS_LABELS = { planned: '📋 В плане', in_progress: '🏃 В работе', done: '✅ Выполнен' };
+const ORDER_STATUS_NEXT = { planned: 'in_progress', in_progress: 'done', done: 'planned' };
+function advanceOrderStatus(id) {
+  const list = loadProductionOrders();
+  const order = list.find(o => o.id === id);
+  if (order) order.status = ORDER_STATUS_NEXT[order.status] || 'planned';
+  saveProductionOrders(list);
+  renderOrdersList();
+}
+function deleteProductionOrder(id) {
+  saveProductionOrders(loadProductionOrders().filter(o => o.id !== id));
+  renderOrdersList();
+}
+function renderOrdersList() {
+  const el = document.getElementById('dash-orders-list');
+  if (!el) return;
+  const list = loadProductionOrders().sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999'));
+  el.innerHTML = list.length ? list.map(o => `
+    <div class="bg-white border border-gray-100 rounded-2xl p-3 flex items-center gap-2">
+      <div class="flex-1 min-w-0">
+        <div class="text-[11px] font-black text-gray-800">${escapeHtmlProd(o.article)} ${o.qty ? '· ' + escapeHtmlProd(o.qty) + ' м' : ''}</div>
+        <div class="text-[9px] text-gray-400 mt-0.5">${o.line ? 'линия ' + escapeHtmlProd(o.line) + ' · ' : ''}${o.deadline ? 'срок ' + o.deadline : 'срок не задан'}</div>
+      </div>
+      <button onclick="advanceOrderStatus('${o.id}')" class="text-[9px] font-black bg-blue-50 text-blue-700 px-2.5 py-1.5 rounded-xl shrink-0">${ORDER_STATUS_LABELS[o.status] || o.status}</button>
+      <button onclick="deleteProductionOrder('${o.id}')" class="text-[9px] bg-red-50 text-red-600 px-2 py-1.5 rounded-xl font-black shrink-0">🗑</button>
+    </div>`).join('') : '<p class="text-gray-400 text-center py-4 text-xs">План пуст</p>';
+}
+
 // ===== Журнал смены =====
 // Отдельно от журнала партий: партия — факт про конкретное ведро, смена —
 // факт про рабочий период начальника смены (когда начал/закончил, сколько
@@ -10856,7 +12098,7 @@ function renderArticleDEHistoryChart(article) {
 let learningSubTab = 'theory';
 function switchLearningSubTab(tab) {
   learningSubTab = tab;
-  ['theory', 'twin', 'errors', 'trainee'].forEach(t => {
+  ['theory', 'twin', 'errors', 'trainee', 'printer'].forEach(t => {
     const panel = document.getElementById('learning-panel-' + t);
     const btn = document.getElementById('learning-subtab-' + t);
     if (!panel || !btn) return;
@@ -10872,6 +12114,7 @@ function switchLearningSubTab(tab) {
   else if (tab === 'twin') renderMasterTwinTab();
   else if (tab === 'errors') renderErrorAnalysisTab();
   else if (tab === 'trainee') renderTraineeTab();
+  else if (tab === 'printer') renderPrinterTrainingTab();
 }
 
 // ===================================================================
@@ -10964,6 +12207,132 @@ function checkColoristQuiz() {
   });
   const scoreEl = document.getElementById('colorist-quiz-score');
   if (scoreEl) scoreEl.textContent = `${correctCount} / ${COLORIST_QUIZ_ITEMS.length}`;
+}
+
+// ===================================================================
+// ОБУЧЕНИЕ ПЕЧАТНИКА: разбор чек-листа приладки (PRELAUNCH_ITEMS уже
+// объявлен выше — здесь только поясняющий текст к каждому пункту по
+// тому же индексу, чтобы не дублировать сам список), шпаргалка "где
+// искать причину брака по секциям" (обобщение логики из VISION_TYPE_INFO
+// в разрезе секций линии, а не отдельных видов брака) и мини-тест.
+// ===================================================================
+const PRINTER_CHECKLIST_NOTES = [
+  'Если натяжение слабое — полотно "гуляет" и рисунок съезжает; если сильное — растяжение и разрывы. Проверяйте на ходу первых метров.',
+  'Низкая вязкость — непрокрас/бледный оттенок, высокая — забитая форма и разводы. Замеряйте вискозиметром, а не на глаз.',
+  'Изношенный ракель или неверный зазор — самая частая причина непрокраса и полос по всей ширине.',
+  'Несовпадение по меткам даёт двоение контуров (несведение цвета) — проверяйте на нескольких метрах, а не по первому же.',
+  'Сушка и тиснение должны выйти на рабочую температуру ДО начала печати — иначе первые метры почти всегда в брак.',
+  'Сверка с эталоном образца ловит отклонения, которые не видно на глаз без сравнения — держите эталон рядом на столе.'
+];
+function renderPrinterChecklistExplain() {
+  const el = document.getElementById('printer-checklist-explain-list');
+  if (!el) return;
+  el.innerHTML = PRELAUNCH_ITEMS.map((item, i) => `
+    <div class="bg-white border border-gray-100 rounded-2xl p-3">
+      <div class="text-[10px] font-black text-gray-800">✅ ${item}</div>
+      <p class="text-[9px] text-gray-500 leading-relaxed mt-1">${PRINTER_CHECKLIST_NOTES[i] || ''}</p>
+    </div>
+  `).join('');
+}
+
+const PRINTER_CAUSE_MAP = [
+  { section: 'Ольбрихт (печать)', color: 'slate', items: [
+    'Пятна/окрас, включения, точки — брызги краски или пасты с ракеля/вала, засорённая краска, непросеянный пигмент',
+    'Смена цвета на участке — неравномерное перемешивание партии, смена бачка/лота пигмента на ходу',
+    'Непрокрас/непропечатка — забита или подсохла форма (клише), низкое давление печати, упала вязкость',
+    'Несведение цвета (контуры двоятся) — рассинхронизация печатных валов или проскальзывание полотна',
+    'Взрыв пасты — избыточное давление подачи, воздух в системе, засор форсунки/сопла'
+  ]},
+  { section: 'Сушка', color: 'amber', items: [
+    'Конденсат/отпечаток — перепад температуры/влажности, конденсат на выходном валу сушильной секции',
+    'Смена фактуры/блеска участками — локальный перегрев или недогрев',
+    'Обмарывание — полотно ещё не досохло и задело оборудование на выходе из сушильной секции'
+  ]},
+  { section: 'Тиснение', color: 'sky', items: [
+    'Смена фактуры/блеска — неравномерное давление или износ вала тиснения на этом участке',
+    'Зацепка/задир — острая кромка вала тиснения либо направляющие/ролики после тиснения'
+  ]},
+  { section: 'Стол смотки', color: 'emerald', items: [
+    'Слипание полотна в рулоне — полотно не до конца досохло на сушке и слиплось при намотке; не перетягивать намотку'
+  ]},
+  { section: 'Подготовка основы (до Ольбрихта)', color: 'stone', items: [
+    'Поглощение рисунка (размытое пятно без чёткого края) — избыточная влажность/пористость основы или нарушение состава грунта'
+  ]},
+  { section: 'Любая секция с валом/узлом', color: 'rose', items: [
+    'Полоса по всей ширине — биение вала, износ вала или сбой натяжения; проверять по порядку от Ольбрихта',
+    'Масляное пятно — подтёк смазки с подшипника/редуктора на любом участке пути'
+  ]}
+];
+function renderPrinterCauseMap() {
+  const el = document.getElementById('printer-cause-map-list');
+  if (!el) return;
+  el.innerHTML = PRINTER_CAUSE_MAP.map(g => `
+    <div class="bg-${g.color}-50 border border-${g.color}-100 rounded-2xl p-3">
+      <div class="text-[10px] font-black uppercase text-${g.color}-700">${g.section}</div>
+      <ul class="text-[9px] text-${g.color}-600 leading-relaxed list-disc pl-4 mt-1 space-y-0.5">
+        ${g.items.map(t => `<li>${t}</li>`).join('')}
+      </ul>
+    </div>
+  `).join('');
+}
+
+const PRINTER_QUIZ_ITEMS = [
+  { emoji: '🎯', desc: 'Локальное цветное пятно на чистом фоне полотна', section: 'Ольбрихт', note: 'Чаще всего брызги краски/пасты с ракеля или соседнего вала, либо загрязнённая краска.' },
+  { emoji: '💧', desc: 'Влажный смазанный след без резких краёв, похож на отпечаток пальца', section: 'Сушка', note: 'Конденсат на выходном валу сушильной секции — проверьте температуру и влажность.' },
+  { emoji: '✨', desc: 'Участок заметно более блестящий или матовый, чем остальное полотно', section: 'Тиснение', note: 'Неравномерное давление или локальный износ вала тиснения на этом участке.' },
+  { emoji: '🧷', desc: 'Слои полотна слиплись между собой прямо в рулоне', section: 'Смотка', note: 'Полотно не до конца досохло на сушке и слиплось при намотке — проверить сушку и натяжение намотки.' },
+  { emoji: '🪝', desc: 'Вытянутый след с чёткой границей, похоже на задир/зацеп', section: 'Тиснение', note: 'Острая кромка вала тиснения либо направляющие/ролики между тиснением и столом смотки.' },
+  { emoji: '🔀', desc: 'Контуры рисунка двоятся, цвета печати сдвинуты друг относительно друга', section: 'Ольбрихт', note: 'Рассинхронизация печатных валов или проскальзывание полотна между секциями Ольбрихта.' }
+];
+const PRINTER_QUIZ_SECTIONS = ['Ольбрихт', 'Сушка', 'Тиснение', 'Смотка', 'Основа'];
+let printerQuizPicks = {};
+function renderPrinterQuiz() {
+  const el = document.getElementById('printer-quiz-list');
+  if (!el) return;
+  printerQuizPicks = {};
+  el.innerHTML = PRINTER_QUIZ_ITEMS.map((q, i) => `
+    <div class="bg-gray-50 border border-gray-100 rounded-2xl p-3 space-y-2" id="pquiz-item-${i}">
+      <div class="text-[10px] font-black text-gray-700">${q.emoji} ${q.desc}</div>
+      <div class="flex flex-wrap gap-1.5">
+        ${PRINTER_QUIZ_SECTIONS.map(s => `<button type="button" onclick="pickPrinterQuizAnswer(${i},'${s}')" id="pquiz-pick-${i}-${s}" class="quiz-pick-btn px-2.5 py-1 rounded-full text-[9px] font-bold border-2 border-gray-200 bg-white text-gray-500">${s}</button>`).join('')}
+      </div>
+      <div id="pquiz-result-${i}" class="hidden text-[9px] font-bold rounded-xl px-2.5 py-2 leading-relaxed"></div>
+    </div>
+  `).join('') + `<button onclick="checkPrinterQuiz()" class="w-full bg-emerald-600 text-white py-3 rounded-2xl font-black uppercase text-[11px] tracking-widest">✅ Проверить всё</button>`;
+  const scoreEl = document.getElementById('printer-quiz-score');
+  if (scoreEl) scoreEl.textContent = '';
+}
+function pickPrinterQuizAnswer(i, section) {
+  printerQuizPicks[i] = section;
+  PRINTER_QUIZ_SECTIONS.forEach(s => {
+    const btn = document.getElementById(`pquiz-pick-${i}-${s}`);
+    if (!btn) return;
+    if (s === section) { btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600'); btn.classList.remove('bg-white', 'text-gray-500', 'border-gray-200'); }
+    else { btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600'); btn.classList.add('bg-white', 'text-gray-500', 'border-gray-200'); }
+  });
+}
+function checkPrinterQuiz() {
+  let correctCount = 0;
+  PRINTER_QUIZ_ITEMS.forEach((q, i) => {
+    const picked = printerQuizPicks[i];
+    const isCorrect = picked === q.section;
+    if (isCorrect) correctCount++;
+    const resEl = document.getElementById(`pquiz-result-${i}`);
+    if (!resEl) return;
+    resEl.classList.remove('hidden');
+    resEl.className = isCorrect
+      ? 'text-[9px] font-bold rounded-xl px-2.5 py-2 leading-relaxed bg-emerald-50 text-emerald-700'
+      : 'text-[9px] font-bold rounded-xl px-2.5 py-2 leading-relaxed bg-red-50 text-red-700';
+    resEl.innerHTML = `${isCorrect ? '✅' : '❌'} Правильно: ${q.section}. ${q.note}`;
+  });
+  const scoreEl = document.getElementById('printer-quiz-score');
+  if (scoreEl) scoreEl.textContent = `${correctCount} / ${PRINTER_QUIZ_ITEMS.length}`;
+}
+
+function renderPrinterTrainingTab() {
+  renderPrinterChecklistExplain();
+  renderPrinterCauseMap();
+  renderPrinterQuiz();
 }
 
 function renderLearningBaseInfo() {
@@ -12003,7 +13372,7 @@ function commitRecipe(recipe, isUpdate) {
   tx.oncomplete = () => {
     toast(isUpdate ? 'Рецепт обновлён!' : 'Рецепт сохранён!');
     loadRecipes(document.getElementById('recipe-search').value);
-    if (jsonbinConfig || loadJsonbinConfig()) pushToJsonbin();
+    if (sheetDbConfig || loadSheetDbConfig()) pushToSheetDb();
     logCorrection(`${isUpdate ? 'Обновили' : 'Сохранили'} рецепт «${recipe.name}»${recipe.article ? ' (арт. ' + recipe.article + ')' : ''}`, 'save');
     clearDraft();
     if (recipe.needsReview) notifyShiftLeadHighDeviation(recipe);
@@ -13176,8 +14545,8 @@ function markSyncSuccess() {
 function checkSyncStaleness() {
   const warn = document.getElementById('sync-stale-warning');
   if (!warn) return;
-  const cfg = jsonbinConfig || loadJsonbinConfig();
-  if (!cfg || !cfg.binId) { warn.classList.add('hidden'); return; }
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) { warn.classList.add('hidden'); return; }
   let last;
   try { last = parseInt(localStorage.getItem(SYNC_LAST_TS_KEY), 10); } catch (e) { last = null; }
   if (!last) { warn.classList.add('hidden'); return; }
@@ -13618,7 +14987,7 @@ function initKeyboardShortcuts() {
 // Инициализация
 initDB();
 loadCorrectionHistory();
-initJsonbinSync();
+initSheetDbSync();
 initUserProfile();
 updateVoiceToggleUI();
 initVoiceSettingsUI();
