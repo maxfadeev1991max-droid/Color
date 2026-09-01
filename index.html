@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -895,19 +894,7 @@
     </button>
   </div>
 
-  <div id="view-colorist" class="p-4 space-y-6 relative">
-    <!-- ===== Блокировка вкладки «Колорист» на время внесения данных =====
-         Пока колорист/начальник смены/мастер УПП вносят эталон+замес+рецепт
-         по конкретной линии, старший печатник этой линии видит вкладку
-         только для чтения (оверлей ниже). Лок общий (в облаке), отдельный
-         на каждую линию (1-4). Снять лок может кто угодно, кроме печатника —
-         это подстраховка, если колорист забыл завершить внесение. -->
-    <div id="colorist-lock-panel" class="hidden bg-white border border-gray-100 rounded-2xl p-4 space-y-2">
-      <h3 class="text-sm font-black text-gray-800 uppercase">🔒 Внесение данных по линиям</h3>
-      <p class="text-[9px] text-gray-400 leading-relaxed -mt-1">Начните внесение по своей линии — печатник этой линии не сможет менять данные, пока не завершите. Снять чужую блокировку можно кнопкой «Освободить» (например, если коллега забыл завершить).</p>
-      <div id="colorist-lock-lines" class="space-y-1.5"></div>
-    </div>
-
+  <div id="view-colorist" class="p-4 space-y-6">
     <!-- ===== Заявки «Нужна краска»: печатник → колорист =====
          Отдельная лёгкая очередь поверх общей базы (поле paintRequests),
          не путать с paintAlert ("налил, забирай") — здесь наоборот, печатник
@@ -957,21 +944,7 @@
       </div>
     </div>
 
-    <!-- Заказ краски (блок выше) намеренно ВНЕ зоны блокировки — печатник
-         должен иметь возможность заказать краску всегда, даже когда линия
-         заблокирована на время внесения эталона/замеса/рецепта. Блокировка
-         оверлеем ниже покрывает только сами поля ввода замера и рецепта. -->
-    <div id="colorist-editable-area" class="relative space-y-6">
-      <div id="colorist-lock-overlay" class="hidden absolute inset-0 z-40 bg-white/95 backdrop-blur-sm rounded-3xl">
-        <div class="sticky top-10 mx-4 bg-slate-900 text-white rounded-2xl p-5 text-center shadow-2xl space-y-2">
-          <div class="text-3xl">🔒</div>
-          <div class="text-sm font-black uppercase">Идёт внесение данных</div>
-          <div id="colorist-lock-overlay-meta" class="text-[11px] text-gray-300"></div>
-          <p class="text-[9px] text-gray-400 leading-relaxed">Пока колорист вносит эталон и замес по вашей линии, изменения здесь недоступны. Заказ краски выше по-прежнему работает. Экран обновится сам, как только внесение завершится.</p>
-        </div>
-      </div>
-
-      <!-- Переключатель режима съёмки -->
+    <!-- Переключатель режима съёмки -->
     <div class="flex items-center justify-center gap-2">
       <button id="mode-2photo-btn" onclick="setPhotoMode('dual')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase btn-active mode-btn-active">2 фото</button>
       <button id="mode-split-btn" onclick="setPhotoMode('split')" class="px-4 py-2 rounded-xl text-[10px] font-black uppercase btn-active mode-btn-inactive">1 фото (оба рядом)</button>
@@ -1586,7 +1559,6 @@
         </div>
         <div id="recipes" class="space-y-4"></div>
     </div>
-    </div>
   </div>
 
   <!-- Журнал правок: пошаговая лента того, что делали с замесом, пока подгоняли
@@ -1716,7 +1688,6 @@
       <button id="learning-subtab-twin" onclick="switchLearningSubTab('twin')" class="py-2 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-500">🧬 Двойник мастера</button>
       <button id="learning-subtab-errors" onclick="switchLearningSubTab('errors')" class="py-2 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-500">⚠️ Разбор ошибок</button>
       <button id="learning-subtab-trainee" onclick="switchLearningSubTab('trainee')" class="py-2 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-500">🎓 Режим ученика</button>
-      <button id="learning-subtab-printer" onclick="switchLearningSubTab('printer')" class="py-2 rounded-xl text-[9px] font-black uppercase bg-gray-100 text-gray-500 col-span-2">🖨️ Обучение печатника</button>
     </div>
 
     <!-- ===== Теоретический курс: основы колориста обойной фабрики =====
@@ -1806,57 +1777,6 @@
       <div class="flex gap-2">
         <input type="text" id="trainee-cert-name" placeholder="Имя ученика для справки..." class="flex-1 p-3 bg-white border-2 border-gray-100 rounded-2xl outline-none text-[11px] font-bold">
         <button onclick="printTraineeCertificate()" class="px-4 bg-indigo-50 text-indigo-700 rounded-2xl font-black uppercase text-[9px] border-2 border-indigo-100">🎓 Справка</button>
-      </div>
-    </div>
-
-    <!-- ===== Обучение печатника / ст.печатника: путь полотна по линии,
-         разбор чек-листа приладки, шпаргалка "где искать причину брака
-         по секциям" и мини-тест "Определи секцию". Фото реальных образцов
-         брака уже есть во вкладке "Контроль брака" → 📸 Справочник видов
-         брака — здесь не дублируем фото, а даём текстовую логику "что
-         произошло → на какой секции искать причину", которую печатнику
-         нужно держать в голове быстрее, чем листать справочник. ===== -->
-    <div id="learning-panel-printer" class="hidden space-y-3">
-      <div class="bg-white border border-gray-100 rounded-2xl p-4 space-y-2">
-        <div class="text-[11px] font-black uppercase text-gray-800">1️⃣ Путь полотна по линии</div>
-        <p class="text-[11px] text-gray-600 leading-relaxed">Камера контроля брака стоит одна — на столе смотки, то есть видит полотно уже <b>после всех секций</b>. Поэтому при любом отклонении важно понимать порядок: <b>Ольбрихт (печать) → Сушка → Тиснение → Стол смотки</b>. Причина почти всегда раньше по ходу полотна, чем то место, где брак заметили.</p>
-        <div class="grid grid-cols-2 gap-2 pt-1">
-          <div class="bg-slate-50 rounded-xl p-2.5"><div class="text-[10px] font-black text-slate-700">1. Ольбрихт</div><p class="text-[9px] text-slate-500 leading-relaxed mt-0.5">Печать рисунка: краска/паста, ракель, печатные валы, клише.</p></div>
-          <div class="bg-amber-50 rounded-xl p-2.5"><div class="text-[10px] font-black text-amber-700">2. Сушка</div><p class="text-[9px] text-amber-600 leading-relaxed mt-0.5">Полотно должно выйти полностью сухим, без конденсата.</p></div>
-          <div class="bg-sky-50 rounded-xl p-2.5"><div class="text-[10px] font-black text-sky-700">3. Тиснение</div><p class="text-[9px] text-sky-600 leading-relaxed mt-0.5">Фактура/рельеф — давление и износ вала тиснения.</p></div>
-          <div class="bg-emerald-50 rounded-xl p-2.5"><div class="text-[10px] font-black text-emerald-700">4. Стол смотки</div><p class="text-[9px] text-emerald-600 leading-relaxed mt-0.5">Финальный контроль и намотка в рулон.</p></div>
-        </div>
-      </div>
-
-      <div class="space-y-2">
-        <div class="text-[11px] font-black uppercase text-gray-800 px-1">2️⃣ Чек-лист приладки — зачем каждый пункт</div>
-        <div id="printer-checklist-explain-list" class="space-y-2"></div>
-      </div>
-
-      <div class="space-y-2">
-        <div class="text-[11px] font-black uppercase text-gray-800 px-1">3️⃣ Где искать причину брака — по секциям</div>
-        <div id="printer-cause-map-list" class="space-y-2"></div>
-        <p class="text-[9px] text-gray-400 leading-relaxed px-1">Полные фото реальных образцов и полный список видов брака — во вкладке «🚨 Контроль брака» → «📸 Справочник видов брака».</p>
-      </div>
-
-      <div class="bg-red-50 border border-red-100 rounded-2xl p-4 space-y-1.5">
-        <div class="text-[11px] font-black uppercase text-red-700">4️⃣ Техника безопасности на линии</div>
-        <ul class="text-[10px] text-red-700 leading-relaxed list-disc pl-4 space-y-1">
-          <li><b>Вращающиеся валы и ракель</b> — не касаться руками во время работы линии; устранять зацепку/намотку только после полной остановки.</li>
-          <li><b>Краска, паста, растворители</b> — работать в перчатках, избегать испарений без вентиляции, не курить рядом с краскоучастком.</li>
-          <li><b>Разлитая краска на полу</b> — вытирать сразу, скользкий пол у линии частая причина травм.</li>
-          <li><b>Сушильная секция</b> — горячие поверхности и валы, не проверять полотно голыми руками на выходе из сушки.</li>
-          <li><b>Неисправность заметили — сразу заявку</b> (кнопка «🔧 Заявка на ремонт/запчасть» на Панели), не пытаться чинить самому под напряжением/на ходу.</li>
-        </ul>
-      </div>
-
-      <div class="space-y-2">
-        <div class="flex justify-between items-center px-1">
-          <div class="text-[11px] font-black uppercase text-gray-800">5️⃣ Мини-тест «Определи секцию»</div>
-          <span id="printer-quiz-score" class="text-[9px] font-black text-gray-400"></span>
-        </div>
-        <p class="text-[9px] text-gray-400 leading-relaxed px-1 -mt-1">По описанию брака выберите секцию, где вероятнее всего искать причину, затем нажмите «Проверить».</p>
-        <div id="printer-quiz-list" class="space-y-2"></div>
       </div>
     </div>
   </div>
@@ -3138,7 +3058,6 @@ function saveLoginProfile() {
   closeLoginModal();
   toast('Добро пожаловать, ' + name + '!');
   sendPresenceHeartbeat();
-  renderColoristLockUI();
 }
 function logoutProfile() {
   currentUserProfile = null;
@@ -3147,7 +3066,6 @@ function logoutProfile() {
   renderOnlineUsers([]);
   renderPaintRequestsSection();
   closeLoginModal();
-  renderColoristLockUI();
 }
 function isShiftLead() {
   return !!(currentUserProfile && currentUserProfile.role === 'shift_lead');
@@ -3729,9 +3647,7 @@ async function checkPaintAlertOnce() {
     if (remote) {
       applyIncomingPaintAlert(remote.paintAlert || null);
       paintRequests = remote.paintRequests || [];
-      coloristLocks = remote.coloristLocks || {};
       renderPaintRequestsSection();
-      renderColoristLockUI();
       checkOverdueRequests();
       checkCancelledOwnRequests();
     }
@@ -3812,124 +3728,6 @@ function saveCancelAlertedRequestIds(set) {
   try { localStorage.setItem(PAINT_REQUEST_CANCEL_ALERTED_KEY, JSON.stringify(Array.from(set))); } catch (e) {}
 }
 let alertedCancelledRequestIds = loadCancelAlertedRequestIds();
-
-// ===== Блокировка вкладки «Колорист» на время внесения данных =====
-// Хранится в общей базе (поле coloristLocks), ключ — номер линии (строка).
-// Заводить/снимать за собой может колорист, начальник смены и мастер УПП —
-// это те, кто реально вносит эталон/замес/рецепт. Снять ЧУЖУЮ блокировку
-// (если коллега забыл завершить) может кто угодно, КРОМЕ старшего печатника —
-// именно от печатника вкладка и защищается этим локом.
-const COLORIST_LOCK_LINES = [1, 2, 3, 4];
-const COLORIST_LOCK_EDITOR_ROLES = ['colorist', 'shift_lead', 'upp_master'];
-let coloristLocks = {};
-function canStartColoristLock() {
-  return !!(currentUserProfile && COLORIST_LOCK_EDITOR_ROLES.includes(currentUserProfile.role));
-}
-function canReleaseColoristLock() {
-  return !!(currentUserProfile && currentUserProfile.role !== 'senior_printer');
-}
-async function acquireColoristLock(line) {
-  if (!canStartColoristLock()) { toast('Начать внесение может только колорист, начальник смены или мастер УПП.'); return; }
-  const cfg = sheetDbConfig || loadSheetDbConfig();
-  if (!cfg || !cfg.url) { toast('Подключите общую базу (☁️ в шапке) — иначе блокировка не будет видна печатнику.'); return; }
-  try {
-    const remote = await fetchCloudSnapshot();
-    if (!remote) throw new Error('Нет ответа от таблицы');
-    remote.coloristLocks = remote.coloristLocks || {};
-    const existing = remote.coloristLocks[line];
-    if (existing && existing.active && existing.byName !== currentUserProfile.name) {
-      toast('⚠️ Линию ' + line + ' уже ведёт ' + existing.byName + ' — сначала уточните у коллеги.');
-      coloristLocks = remote.coloristLocks;
-      renderColoristLockUI();
-      return;
-    }
-    remote.coloristLocks[line] = { active: true, byName: currentUserProfile.name, byRole: currentUserProfile.role, ts: Date.now() };
-    await pushCloudSnapshot(remote);
-    coloristLocks = remote.coloristLocks;
-    renderColoristLockUI();
-    toast('🔒 Внесение по линии ' + line + ' начато — печатник этой линии временно не сможет менять данные.');
-  } catch (e) {
-    console.error(e);
-    toast('Не удалось поставить блокировку — проверьте интернет.');
-  }
-}
-async function releaseColoristLock(line) {
-  if (!canReleaseColoristLock()) { toast('Снять блокировку печатник не может.'); return; }
-  const cfg = sheetDbConfig || loadSheetDbConfig();
-  if (!cfg || !cfg.url) return;
-  try {
-    const remote = await fetchCloudSnapshot();
-    if (!remote) throw new Error('Нет ответа от таблицы');
-    remote.coloristLocks = remote.coloristLocks || {};
-    remote.coloristLocks[line] = { active: false };
-    await pushCloudSnapshot(remote);
-    coloristLocks = remote.coloristLocks;
-    renderColoristLockUI();
-    toast('🔓 Линия ' + line + ' освобождена.');
-  } catch (e) {
-    console.error(e);
-    toast('Не удалось снять блокировку — проверьте интернет.');
-  }
-}
-function coloristLockElapsedLabel(ts) {
-  const mins = Math.floor((Date.now() - ts) / 60000);
-  if (mins < 1) return 'только что';
-  if (mins < 60) return mins + ' мин назад';
-  const h = Math.floor(mins / 60), m = mins % 60;
-  return h + ' ч ' + m + ' мин назад';
-}
-function renderColoristLockUI() {
-  if (!currentUserProfile) return;
-  const role = currentUserProfile.role;
-  const panel = document.getElementById('colorist-lock-panel');
-  const overlay = document.getElementById('colorist-lock-overlay');
-
-  // Панель управления локами — видна всем, кроме печатника (у него вместо
-  // неё оверлей ниже). Начинать внесение могут только 3 роли-редактора,
-  // но освобождать чужой лок могут и остальные не-печатники (директор, нач. цеха).
-  if (panel) {
-    if (role === 'senior_printer') {
-      panel.classList.add('hidden');
-    } else {
-      panel.classList.remove('hidden');
-      const linesEl = document.getElementById('colorist-lock-lines');
-      if (linesEl) {
-        linesEl.innerHTML = COLORIST_LOCK_LINES.map(line => {
-          const lock = coloristLocks[line];
-          const active = lock && lock.active;
-          const mine = active && lock.byName === currentUserProfile.name;
-          let actionBtn = '';
-          if (active) {
-            actionBtn = mine
-              ? `<button onclick="releaseColoristLock(${line})" class="bg-emerald-600 text-white text-[9px] font-black uppercase px-3 py-1.5 rounded-lg">Завершить</button>`
-              : `<button onclick="releaseColoristLock(${line})" class="bg-red-100 text-red-700 text-[9px] font-black uppercase px-3 py-1.5 rounded-lg">Освободить</button>`;
-          } else if (canStartColoristLock()) {
-            actionBtn = `<button onclick="acquireColoristLock(${line})" class="bg-blue-600 text-white text-[9px] font-black uppercase px-3 py-1.5 rounded-lg">Начать внесение</button>`;
-          }
-          const status = active ? ('🔒 ' + escapeHtmlProd(lock.byName) + ' · ' + coloristLockElapsedLabel(lock.ts)) : '🔓 свободна';
-          return `<div class="flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2">
-            <div class="text-[10px] font-bold text-gray-700">Линия ${line} <span class="text-gray-400 font-normal">· ${status}</span></div>
-            ${actionBtn}
-          </div>`;
-        }).join('');
-      }
-    }
-  }
-
-  // Оверлей блокировки — виден только старшему печатнику, только пока
-  // ЕГО линия заблокирована, и полностью перекрывает клики по вкладке.
-  if (overlay) {
-    const myLine = role === 'senior_printer' ? currentUserProfile.line : null;
-    const lock = myLine ? coloristLocks[myLine] : null;
-    if (role === 'senior_printer' && myLine && lock && lock.active) {
-      overlay.classList.remove('hidden');
-      const meta = document.getElementById('colorist-lock-overlay-meta');
-      if (meta) meta.textContent = 'Линия ' + myLine + ' · вносит ' + lock.byName + ' (' + roleLabel(lock.byRole) + ') · ' + coloristLockElapsedLabel(lock.ts);
-    } else {
-      overlay.classList.add('hidden');
-    }
-  }
-}
 function checkCancelledOwnRequests() {
   if (!currentUserProfile || currentUserProfile.role !== 'senior_printer' || !currentUserProfile.line) return;
   let changed = false;
@@ -8761,7 +8559,6 @@ function switchView(view) {
   } else {
     colorist.classList.remove('hidden');
     btnColorist.classList.remove(...inactiveClasses); btnColorist.classList.add(...activeClasses);
-    renderColoristLockUI();
   }
 }
 
@@ -8798,10 +8595,7 @@ const HELP_SECTIONS = [
       { q: '📜 История заказов клиента', a: 'По имени заказчика показывает все прошлые артикулы и цвета для него — не нужно спрашивать заново, что красили в прошлый раз.' },
       { q: 'Сохранить / 🔁 Повторить как вчера', a: '«Сохранить» кладёт текущий рецепт в библиотеку (для истории, статистики и подсказок). «Повторить как вчера» подставляет последний сохранённый рецепт этого артикула целиком, без пересчёта с нуля.' },
       { q: '✅ Сдать партию (чек-лист)', a: 'Открывает финальный чек-лист перед тем, как считать партию готовой и сданной.' },
-      { q: 'WhatsApp / Telegram / Печать', a: 'Отправляет текущий рецепт в мессенджер или готовит его к печати/сохранению как PDF — без необходимости переписывать вручную.' },
-      { q: '🧴 Нужна краска (заявка от печатника)', a: 'Старший печатник заказывает краску прямо на этой вкладке: артикул/цвет, количество (напр. «5 кг»), комментарий и срочность — 🟢 не срочно, 🟡 в течение смены, 🔴 стоит линия. Заявка уходит в общую очередь колористу и начальнику смены. Печатник видит статус своей заявки, сколько заявок ждёт впереди, и получает уведомление на весь экран, когда краска налита — или короткое уведомление, если заявку отменили.' },
-      { q: 'Очередь заявок у колориста / начальника смены', a: 'Показывает все активные заявки от печатников по всем линиям. Заявки с срочностью 🔴 «Стоит линия» всегда идут первыми, внутри одной срочности — от самой давней. Просроченные (дольше порога простоя) подсвечиваются красным. «Взял» переводит заявку в работу, «Налил» одновременно закрывает заявку и шлёт печатнику алерт «Краска налита».' },
-      { q: '🔒 Внесение данных по линиям', a: 'Панель вверху вкладки: колорист, начальник смены или мастер УПП нажимают «Начать внесение» по своей линии перед тем, как вносить эталон/замес/рецепт. Пока лок активен, старший печатник этой линии видит вместо формы экран «Идёт внесение данных» и не может ничего менять — заказ краски при этом продолжает работать как обычно. По окончании нажимается «Завершить»; если коллега забыл это сделать, снять чужую блокировку может кто угодно, кроме старшего печатника, кнопкой «Освободить». Другие линии эта блокировка не затрагивает.' }
+      { q: 'WhatsApp / Telegram / Печать', a: 'Отправляет текущий рецепт в мессенджер или готовит его к печати/сохранению как PDF — без необходимости переписывать вручную.' }
     ]
   },
   {
@@ -12098,7 +11892,7 @@ function renderArticleDEHistoryChart(article) {
 let learningSubTab = 'theory';
 function switchLearningSubTab(tab) {
   learningSubTab = tab;
-  ['theory', 'twin', 'errors', 'trainee', 'printer'].forEach(t => {
+  ['theory', 'twin', 'errors', 'trainee'].forEach(t => {
     const panel = document.getElementById('learning-panel-' + t);
     const btn = document.getElementById('learning-subtab-' + t);
     if (!panel || !btn) return;
@@ -12114,7 +11908,6 @@ function switchLearningSubTab(tab) {
   else if (tab === 'twin') renderMasterTwinTab();
   else if (tab === 'errors') renderErrorAnalysisTab();
   else if (tab === 'trainee') renderTraineeTab();
-  else if (tab === 'printer') renderPrinterTrainingTab();
 }
 
 // ===================================================================
@@ -12207,132 +12000,6 @@ function checkColoristQuiz() {
   });
   const scoreEl = document.getElementById('colorist-quiz-score');
   if (scoreEl) scoreEl.textContent = `${correctCount} / ${COLORIST_QUIZ_ITEMS.length}`;
-}
-
-// ===================================================================
-// ОБУЧЕНИЕ ПЕЧАТНИКА: разбор чек-листа приладки (PRELAUNCH_ITEMS уже
-// объявлен выше — здесь только поясняющий текст к каждому пункту по
-// тому же индексу, чтобы не дублировать сам список), шпаргалка "где
-// искать причину брака по секциям" (обобщение логики из VISION_TYPE_INFO
-// в разрезе секций линии, а не отдельных видов брака) и мини-тест.
-// ===================================================================
-const PRINTER_CHECKLIST_NOTES = [
-  'Если натяжение слабое — полотно "гуляет" и рисунок съезжает; если сильное — растяжение и разрывы. Проверяйте на ходу первых метров.',
-  'Низкая вязкость — непрокрас/бледный оттенок, высокая — забитая форма и разводы. Замеряйте вискозиметром, а не на глаз.',
-  'Изношенный ракель или неверный зазор — самая частая причина непрокраса и полос по всей ширине.',
-  'Несовпадение по меткам даёт двоение контуров (несведение цвета) — проверяйте на нескольких метрах, а не по первому же.',
-  'Сушка и тиснение должны выйти на рабочую температуру ДО начала печати — иначе первые метры почти всегда в брак.',
-  'Сверка с эталоном образца ловит отклонения, которые не видно на глаз без сравнения — держите эталон рядом на столе.'
-];
-function renderPrinterChecklistExplain() {
-  const el = document.getElementById('printer-checklist-explain-list');
-  if (!el) return;
-  el.innerHTML = PRELAUNCH_ITEMS.map((item, i) => `
-    <div class="bg-white border border-gray-100 rounded-2xl p-3">
-      <div class="text-[10px] font-black text-gray-800">✅ ${item}</div>
-      <p class="text-[9px] text-gray-500 leading-relaxed mt-1">${PRINTER_CHECKLIST_NOTES[i] || ''}</p>
-    </div>
-  `).join('');
-}
-
-const PRINTER_CAUSE_MAP = [
-  { section: 'Ольбрихт (печать)', color: 'slate', items: [
-    'Пятна/окрас, включения, точки — брызги краски или пасты с ракеля/вала, засорённая краска, непросеянный пигмент',
-    'Смена цвета на участке — неравномерное перемешивание партии, смена бачка/лота пигмента на ходу',
-    'Непрокрас/непропечатка — забита или подсохла форма (клише), низкое давление печати, упала вязкость',
-    'Несведение цвета (контуры двоятся) — рассинхронизация печатных валов или проскальзывание полотна',
-    'Взрыв пасты — избыточное давление подачи, воздух в системе, засор форсунки/сопла'
-  ]},
-  { section: 'Сушка', color: 'amber', items: [
-    'Конденсат/отпечаток — перепад температуры/влажности, конденсат на выходном валу сушильной секции',
-    'Смена фактуры/блеска участками — локальный перегрев или недогрев',
-    'Обмарывание — полотно ещё не досохло и задело оборудование на выходе из сушильной секции'
-  ]},
-  { section: 'Тиснение', color: 'sky', items: [
-    'Смена фактуры/блеска — неравномерное давление или износ вала тиснения на этом участке',
-    'Зацепка/задир — острая кромка вала тиснения либо направляющие/ролики после тиснения'
-  ]},
-  { section: 'Стол смотки', color: 'emerald', items: [
-    'Слипание полотна в рулоне — полотно не до конца досохло на сушке и слиплось при намотке; не перетягивать намотку'
-  ]},
-  { section: 'Подготовка основы (до Ольбрихта)', color: 'stone', items: [
-    'Поглощение рисунка (размытое пятно без чёткого края) — избыточная влажность/пористость основы или нарушение состава грунта'
-  ]},
-  { section: 'Любая секция с валом/узлом', color: 'rose', items: [
-    'Полоса по всей ширине — биение вала, износ вала или сбой натяжения; проверять по порядку от Ольбрихта',
-    'Масляное пятно — подтёк смазки с подшипника/редуктора на любом участке пути'
-  ]}
-];
-function renderPrinterCauseMap() {
-  const el = document.getElementById('printer-cause-map-list');
-  if (!el) return;
-  el.innerHTML = PRINTER_CAUSE_MAP.map(g => `
-    <div class="bg-${g.color}-50 border border-${g.color}-100 rounded-2xl p-3">
-      <div class="text-[10px] font-black uppercase text-${g.color}-700">${g.section}</div>
-      <ul class="text-[9px] text-${g.color}-600 leading-relaxed list-disc pl-4 mt-1 space-y-0.5">
-        ${g.items.map(t => `<li>${t}</li>`).join('')}
-      </ul>
-    </div>
-  `).join('');
-}
-
-const PRINTER_QUIZ_ITEMS = [
-  { emoji: '🎯', desc: 'Локальное цветное пятно на чистом фоне полотна', section: 'Ольбрихт', note: 'Чаще всего брызги краски/пасты с ракеля или соседнего вала, либо загрязнённая краска.' },
-  { emoji: '💧', desc: 'Влажный смазанный след без резких краёв, похож на отпечаток пальца', section: 'Сушка', note: 'Конденсат на выходном валу сушильной секции — проверьте температуру и влажность.' },
-  { emoji: '✨', desc: 'Участок заметно более блестящий или матовый, чем остальное полотно', section: 'Тиснение', note: 'Неравномерное давление или локальный износ вала тиснения на этом участке.' },
-  { emoji: '🧷', desc: 'Слои полотна слиплись между собой прямо в рулоне', section: 'Смотка', note: 'Полотно не до конца досохло на сушке и слиплось при намотке — проверить сушку и натяжение намотки.' },
-  { emoji: '🪝', desc: 'Вытянутый след с чёткой границей, похоже на задир/зацеп', section: 'Тиснение', note: 'Острая кромка вала тиснения либо направляющие/ролики между тиснением и столом смотки.' },
-  { emoji: '🔀', desc: 'Контуры рисунка двоятся, цвета печати сдвинуты друг относительно друга', section: 'Ольбрихт', note: 'Рассинхронизация печатных валов или проскальзывание полотна между секциями Ольбрихта.' }
-];
-const PRINTER_QUIZ_SECTIONS = ['Ольбрихт', 'Сушка', 'Тиснение', 'Смотка', 'Основа'];
-let printerQuizPicks = {};
-function renderPrinterQuiz() {
-  const el = document.getElementById('printer-quiz-list');
-  if (!el) return;
-  printerQuizPicks = {};
-  el.innerHTML = PRINTER_QUIZ_ITEMS.map((q, i) => `
-    <div class="bg-gray-50 border border-gray-100 rounded-2xl p-3 space-y-2" id="pquiz-item-${i}">
-      <div class="text-[10px] font-black text-gray-700">${q.emoji} ${q.desc}</div>
-      <div class="flex flex-wrap gap-1.5">
-        ${PRINTER_QUIZ_SECTIONS.map(s => `<button type="button" onclick="pickPrinterQuizAnswer(${i},'${s}')" id="pquiz-pick-${i}-${s}" class="quiz-pick-btn px-2.5 py-1 rounded-full text-[9px] font-bold border-2 border-gray-200 bg-white text-gray-500">${s}</button>`).join('')}
-      </div>
-      <div id="pquiz-result-${i}" class="hidden text-[9px] font-bold rounded-xl px-2.5 py-2 leading-relaxed"></div>
-    </div>
-  `).join('') + `<button onclick="checkPrinterQuiz()" class="w-full bg-emerald-600 text-white py-3 rounded-2xl font-black uppercase text-[11px] tracking-widest">✅ Проверить всё</button>`;
-  const scoreEl = document.getElementById('printer-quiz-score');
-  if (scoreEl) scoreEl.textContent = '';
-}
-function pickPrinterQuizAnswer(i, section) {
-  printerQuizPicks[i] = section;
-  PRINTER_QUIZ_SECTIONS.forEach(s => {
-    const btn = document.getElementById(`pquiz-pick-${i}-${s}`);
-    if (!btn) return;
-    if (s === section) { btn.classList.add('bg-blue-600', 'text-white', 'border-blue-600'); btn.classList.remove('bg-white', 'text-gray-500', 'border-gray-200'); }
-    else { btn.classList.remove('bg-blue-600', 'text-white', 'border-blue-600'); btn.classList.add('bg-white', 'text-gray-500', 'border-gray-200'); }
-  });
-}
-function checkPrinterQuiz() {
-  let correctCount = 0;
-  PRINTER_QUIZ_ITEMS.forEach((q, i) => {
-    const picked = printerQuizPicks[i];
-    const isCorrect = picked === q.section;
-    if (isCorrect) correctCount++;
-    const resEl = document.getElementById(`pquiz-result-${i}`);
-    if (!resEl) return;
-    resEl.classList.remove('hidden');
-    resEl.className = isCorrect
-      ? 'text-[9px] font-bold rounded-xl px-2.5 py-2 leading-relaxed bg-emerald-50 text-emerald-700'
-      : 'text-[9px] font-bold rounded-xl px-2.5 py-2 leading-relaxed bg-red-50 text-red-700';
-    resEl.innerHTML = `${isCorrect ? '✅' : '❌'} Правильно: ${q.section}. ${q.note}`;
-  });
-  const scoreEl = document.getElementById('printer-quiz-score');
-  if (scoreEl) scoreEl.textContent = `${correctCount} / ${PRINTER_QUIZ_ITEMS.length}`;
-}
-
-function renderPrinterTrainingTab() {
-  renderPrinterChecklistExplain();
-  renderPrinterCauseMap();
-  renderPrinterQuiz();
 }
 
 function renderLearningBaseInfo() {
