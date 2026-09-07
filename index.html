@@ -4167,7 +4167,16 @@ function pinFreshLocalFields(remote) {
   if (typeof productionOrders !== 'undefined' && !productionOrdersCloudSyncing) remote.productionOrders = mergeArrayForCloudPush(remote.productionOrders, productionOrders);
 }
 const CLOUD_PUSH_SKIP = Symbol('cloud-push-skip');
-async function pushCloudSnapshotWithRetry(mutateFn, verifyFn, maxAttempts) {
+// Все операции read-modify-write к одной Google Таблице выполняются
+// последовательно. Иначе параллельный heartbeat/ход линии мог прочитать
+// старый снимок и затереть только что добавленную заявку колористу.
+let cloudWriteQueue = Promise.resolve();
+function pushCloudSnapshotWithRetry(mutateFn, verifyFn, maxAttempts) {
+  const run = cloudWriteQueue.then(() => pushCloudSnapshotWithRetryUnlocked(mutateFn, verifyFn, maxAttempts));
+  cloudWriteQueue = run.catch(() => {});
+  return run;
+}
+async function pushCloudSnapshotWithRetryUnlocked(mutateFn, verifyFn, maxAttempts) {
   // Apps Script может вернуть «Таблица занята другой записью» при
   // одновременной фоновой синхронизации. Раньше исключение сразу улетало
   // наружу, поэтому заявка попадала только в локальную очередь. Повторяем
