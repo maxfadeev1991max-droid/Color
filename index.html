@@ -843,7 +843,27 @@
 
     /* --- Модалки: небольшая инерция фона при открытии (было мгновенное затемнение) */
     #duplicate-article-modal, .modal-overlay { transition: background-color .22s ease; }
-  </style>
+  
+  /* «Работа смены» — спокойная карточка, как «Процент брака», без синего
+     градиента и с ограничением высоты на небольших экранах. */
+  #dash-shift-race-wrap, #printer-shift-race-wrap {
+    background: #fff !important;
+    color: #374151 !important;
+    border: 1px solid #f3f4f6 !important;
+    box-shadow: 0 2px 8px rgba(15,23,42,.05) !important;
+  }
+  #dash-shift-race-lines, #printer-shift-race-lines {
+    max-height: 330px;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+  #dash-shift-race-lines > div, #printer-shift-race-lines > div {
+    background: #f9fafb !important;
+    border: 1px solid #f3f4f6;
+  }
+  #paint-predictor-wrap { scroll-margin-top: 12px; }
+
+</style>
 </head>
 <body class="bg-slate-100 min-h-screen pb-20 transition-all duration-500" id="main-body">
 
@@ -1753,7 +1773,7 @@
       <div id="printer-defect-banner-value" class="text-6xl font-black mt-1 tabular-nums leading-none">0%</div>
       <div id="printer-defect-banner-detail" class="text-[10px] font-bold text-white/65 mt-2 uppercase tracking-wide">за текущую смену · выработка ещё не начата</div>
     </div>
-    <div id="printer-shift-race-top-wrap" class="bg-gradient-to-br from-indigo-700 via-blue-700 to-cyan-600 rounded-2xl p-4 space-y-3 text-white shadow-lg overflow-hidden relative">
+    <div id="printer-shift-race-top-wrap" class="bg-white border border-gray-100 rounded-2xl p-3 space-y-2 text-gray-700 shadow-sm overflow-hidden relative">
       <div class="flex items-center justify-between gap-2">
         <div class="text-[11px] font-black uppercase tracking-wide">🏁 Работа смены — все 4 линии</div>
         <span id="printer-shift-race-top-time" class="text-[9px] font-bold text-white/70"></span>
@@ -1881,10 +1901,10 @@
     <!-- Клон виджета "Работа смены" (оригинал — во вкладке «Панель», см.
          #dash-shift-race-wrap). renderShiftRace() обновляет оба набора
          элементов одновременно (см. функцию в JS). -->
-    <div id="printer-shift-race-wrap" class="bg-gradient-to-br from-indigo-700 via-blue-700 to-cyan-600 rounded-2xl p-4 space-y-3 text-white shadow-lg overflow-hidden relative">
+    <div id="printer-shift-race-wrap" class="bg-white border border-gray-100 rounded-2xl p-3 space-y-2 text-gray-700 shadow-sm overflow-hidden relative">
       <div class="flex items-center justify-between gap-2">
         <div class="text-[11px] font-black uppercase tracking-wide flex items-center gap-1.5">🏁 Работа смены</div>
-        <span id="printer-shift-race-time" class="text-[9px] font-bold text-white/70"></span>
+        <span id="printer-shift-race-time" class="text-[9px] font-bold text-gray-400"></span>
       </div>
       <div id="printer-shift-race-lines" class="space-y-2"></div>
     </div>
@@ -2588,10 +2608,10 @@
   <!-- Работа смены — видно ВСЕМ ролям сразу, сверху (как и «Статус линий
        сейчас»), чтобы и печатник, и начальник смены с первого взгляда видели,
        кто сколько уже выкатал рулонов за текущую смену и кто кого догоняет. -->
-  <div id="dash-shift-race-wrap" class="bg-gradient-to-br from-indigo-700 via-blue-700 to-cyan-600 rounded-2xl p-4 space-y-3 text-white shadow-lg overflow-hidden relative">
+  <div id="dash-shift-race-wrap" class="bg-white border border-gray-100 rounded-2xl p-3 space-y-2 text-gray-700 shadow-sm overflow-hidden relative">
     <div class="flex items-center justify-between gap-2">
       <div class="text-[11px] font-black uppercase tracking-wide flex items-center gap-1.5">🏁 Работа смены</div>
-      <span id="dash-shift-race-time" class="text-[9px] font-bold text-white/70"></span>
+      <span id="dash-shift-race-time" class="text-[9px] font-bold text-gray-400"></span>
     </div>
     <div id="dash-shift-race-lines" class="space-y-2"></div>
   </div>
@@ -3997,9 +4017,13 @@ function saveSheetDbConfig(cfg) {
 async function fetchCloudSnapshot() {
   const cfg = sheetDbConfig || loadSheetDbConfig();
   if (!cfg || !cfg.url) return null;
-  const resp = await fetch(cfg.url + '?action=get&t=' + Date.now());
+  const joiner = cfg.url.includes('?') ? '&' : '?';
+  const resp = await fetch(cfg.url + joiner + 'action=get&t=' + Date.now());
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
-  const data = await resp.json();
+  const responseText = await resp.text();
+  let data;
+  try { data = JSON.parse(responseText); }
+  catch (parseError) { throw new Error('Общая база вернула некорректный ответ'); }
   return {
     recipes: data.recipes || [],
     presence: data.presence || [],
@@ -4048,7 +4072,17 @@ async function pushCloudSnapshot(record) {
     body: JSON.stringify({ action: 'put', payload: record })
   });
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
-  const out = await resp.json().catch(() => ({ ok: true }));
+  // Apps Script иногда возвращает пустой ответ или текст вместо JSON
+  // (например, после редиректа/холодного старта). HTTP 2xx в этом случае
+  // означает, что POST принят; не считаем такую заявку ошибочной.
+  const responseText = await resp.text();
+  let out = { ok: true };
+  if (responseText && responseText.trim()) {
+    try { out = JSON.parse(responseText); }
+    catch (parseError) {
+      console.warn('Общая база вернула не-JSON после POST; HTTP-ответ успешен:', responseText.slice(0, 160));
+    }
+  }
   if (out && out.ok === false) throw new Error(out.error || 'Ошибка записи в таблицу');
   return true;
 }
@@ -15903,6 +15937,10 @@ function preparePredictivePaintRequest(index) {
 function updatePaintPredictorLive() {
   const rowsEl = document.getElementById('paint-predictor-rows');
   if (!rowsEl || rowsEl.children.length !== PAINT_PREDICTOR_SECTIONS) return;
+  // Таймер «Работа смены» вызывает этот рендер каждую секунду. Если
+  // пользователь печатает в прогнозе, перерисовка innerHTML уничтожает
+  // активное поле и часть введённых символов. Оставляем текущий DOM до blur.
+  if (rowsEl.contains(document.activeElement)) return;
   const line = getLineForRunPrefix('printer');
   const active = line ? lineRuns.find(r => normalizeLineKey(r.line) === normalizeLineKey(line) && !r.endTs) : null;
   const speed = active && active.speedMPerMin > 0 ? active.speedMPerMin : 0;
@@ -15952,7 +15990,7 @@ function renderPaintPredictor() {
     const orderPaint = consumption > 0 ? consumption * 10.05 : null;
     return `<div class="bg-white rounded-xl p-2.5 border ${alert ? 'border-red-300' : 'border-amber-100'} space-y-2">
       <div class="flex items-center justify-between"><div class="text-[10px] font-black text-gray-700">Секция ${i + 1}</div><div id="paint-predictor-minutes-${i}" class="text-[11px] font-black ${alert ? 'text-red-600' : 'text-emerald-600'}">${minutes == null ? '—' : `≈ ${Math.round(minutes)} мин`}</div></div>
-      <div class="grid grid-cols-3 gap-1.5"><input type="number" min="0" step="0.1" value="${r.reserve || ''}" placeholder="Запас, кг" oninput="onPaintPredictorInput(${i},'reserve',this.value)" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"><input type="number" min="0" step="0.1" value="${r.poured || ''}" placeholder="Уже налили, кг" oninput="onPaintPredictorInput(${i},'poured',this.value)" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"><input type="number" min="0" step="0.01" value="${r.consumption || ''}" placeholder="Расход, кг/1000 м" oninput="onPaintPredictorInput(${i},'consumption',this.value)" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"></div>
+      <div class="grid grid-cols-3 gap-1.5"><input type="number" min="0" step="0.1" value="${r.reserve || ''}" placeholder="Запас, кг" oninput="onPaintPredictorInput(${i},'reserve',this.value)" onblur="renderPaintPredictor()" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"><input type="number" min="0" step="0.1" value="${r.poured || ''}" placeholder="Уже налили, кг" oninput="onPaintPredictorInput(${i},'poured',this.value)" onblur="renderPaintPredictor()" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"><input type="number" min="0" step="0.01" value="${r.consumption || ''}" placeholder="Расход, кг/1000 м" oninput="onPaintPredictorInput(${i},'consumption',this.value)" onblur="renderPaintPredictor()" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"></div>
       <div id="paint-predictor-status-${i}">${minutes != null ? `<div class="flex items-center justify-between text-[9px] ${alert ? 'text-red-600 font-bold' : 'text-gray-500'}"><span>${alert ? '⚠️ Краски осталось менее 40 минут' : `доступно ${available.toFixed(2)} кг`}${orderPaint != null ? ` · на 1000 рул. ≈ ${orderPaint.toFixed(2)} кг` : ''}</span><button onclick="preparePredictivePaintRequest(${i})" class="bg-blue-600 text-white px-2 py-1 rounded-lg font-black uppercase">📨 Подготовить заявку</button></div>` : '<div class="text-[8px] text-gray-400">Заполните расход и запустите линию для прогноза.</div>'}</div></div>`;
   }).join('');
   const summaryEl = document.getElementById('paint-predictor-summary');
@@ -16005,7 +16043,7 @@ function renderShiftRace() {
     // смены. Раз виджет теперь про работу смены целиком (а не только про
     // рулоны), показываем это явно, а не просто "пока пусто".
     const idleSinceStart = formatDurationMs(Math.max(0, nowMs - startMs));
-    wraps.forEach(wrap => { wrap.innerHTML = `<div class="text-[10px] text-white/70 text-center py-1.5">Пока никто не выкатил ни одного рулона в этой смене — все линии простаивают ${idleSinceStart} 🚀</div>`; });
+    wraps.forEach(wrap => { wrap.innerHTML = `<div class="text-[10px] text-gray-400 text-center py-1.5">Пока никто не выкатил ни одного рулона в этой смене — все линии простаивают ${idleSinceStart} 🚀</div>`; });
     return;
   }
   const medals = ['🥇', '🥈', '🥉', '4️⃣'];
@@ -16024,18 +16062,18 @@ function renderShiftRace() {
       const ahead = ranked[idx - 1];
       const gapToAhead = ahead ? Math.round(ahead.netRolls - l.netRolls) : 0;
       subLabel = gapToAhead > 0
-        ? `<span class="text-white/80">отстаёт от лидера на ${gapToLeader} рул. · ещё ${gapToAhead} рул. — и обгонит ${medals[idx - 1] || ''} Линию ${ahead.n}</span>`
-        : `<span class="text-white/80">отстаёт от лидера на ${gapToLeader} рул.</span>`;
+        ? `<span class="text-gray-500">отстаёт от лидера на ${gapToLeader} рул. · ещё ${gapToAhead} рул. — и обгонит ${medals[idx - 1] || ''} Линию ${ahead.n}</span>`
+        : `<span class="text-gray-500">отстаёт от лидера на ${gapToLeader} рул.</span>`;
     }
     // Процент брака показываем всегда, как только на линии есть выкатка (не
     // только когда он больше нуля) — чтобы метрика была видна всем ролям
     // постоянно, а не появлялась внезапно, когда кто-то наконец впишет брак.
     const qualityLine = l.rolls > 0
-      ? `<div class="text-[8px] ${l.defectPct >= 5 ? 'text-red-200 font-bold' : (l.defectPct > 0 ? 'text-amber-200' : 'text-white/60')}">из них чисто (без брака): ${Math.round(l.netRolls)} рул. · брак ${l.defectPct}%</div>` : '';
+      ? `<div class="text-[8px] ${l.defectPct >= 5 ? 'text-red-600 font-bold' : (l.defectPct > 0 ? 'text-amber-600' : 'text-gray-400')}">из них чисто (без брака): ${Math.round(l.netRolls)} рул. · брак ${l.defectPct}%</div>` : '';
     const correctionBadge = l.hasCorrection
-      ? `<span class="text-[8px] bg-sky-400/30 text-sky-100 font-black px-1.5 py-0.5 rounded-full">✏️ поправка ${l.correctionRolls > 0 ? '+' : ''}${Math.round(l.correctionRolls * 10) / 10}</span>` : '';
+      ? `<span class="text-[8px] bg-sky-100 text-sky-700 font-black px-1.5 py-0.5 rounded-full">✏️ поправка ${l.correctionRolls > 0 ? '+' : ''}${Math.round(l.correctionRolls * 10) / 10}</span>` : '';
     const milestone = celebrateMilestoneOnce('line' + l.n + '_' + startMs, SHIFT_MILESTONES, l.rolls, t => `🎉 Линия ${l.n}: ${t}+ рулонов за смену!`);
-    const milestoneBadge = milestone ? `<span class="text-[8px] bg-white/20 font-black px-1.5 py-0.5 rounded-full">🔥 ${milestone}+</span>` : '';
+    const milestoneBadge = milestone ? `<span class="text-[8px] bg-gray-100 font-black px-1.5 py-0.5 rounded-full">🔥 ${milestone}+</span>` : '';
     // Признание не только цифрой рулонов: стрик линии без брака (та же
     // логика, что и у личного зачёта печатников, только по линии целиком) и
     // рекорд линии за одну смену — оба обновляются с той же кэш-логикой
@@ -16043,11 +16081,11 @@ function renderShiftRace() {
     // раз, пока условие верно (стрик/рекорд — это статус, не разовое событие).
     const lineStreak = getLineStreak(l.n);
     const streakBadge = lineStreak >= STREAK_MIN_TO_SHOW
-      ? `<span class="text-[8px] bg-orange-400/30 text-orange-100 font-black px-1.5 py-0.5 rounded-full">🎯 Стрик ${lineStreak} см. без брака</span>` : '';
+      ? `<span class="text-[8px] bg-orange-100 text-orange-700 font-black px-1.5 py-0.5 rounded-full">🎯 Стрик ${lineStreak} см. без брака</span>` : '';
     let recordBadge = '';
     if (l.rolls > 0) {
       const prevBestNet = getLineBestShiftNetRolls(l.n, startMs);
-      if (prevBestNet > 0 && l.netRolls > prevBestNet) recordBadge = `<span class="text-[8px] bg-amber-300/30 text-amber-100 font-black px-1.5 py-0.5 rounded-full">🏆 Рекорд линии!</span>`;
+      if (prevBestNet > 0 && l.netRolls > prevBestNet) recordBadge = `<span class="text-[8px] bg-amber-100 text-amber-700 font-black px-1.5 py-0.5 rounded-full">🏆 Рекорд линии!</span>`;
     }
     // Простой за смену: показываем, только если он есть (>= 1 мин), красным/
     // янтарным подсвечиваем, если линия стоит именно сейчас.
@@ -16055,19 +16093,19 @@ function renderShiftRace() {
       ? `${formatDurationMs(l.idleMs)}${!l.isRunningNow ? ' · стоит сейчас' : ''}`
       : (!l.isRunningNow ? 'стоит сейчас' : '');
     const idleLine = idleLabel
-      ? `<div class="text-[8px] font-bold ${!l.isRunningNow ? 'text-amber-200' : 'text-white/60'}">⏱ простой за смену: ${idleLabel}</div>` : '';
+      ? `<div class="text-[8px] font-bold ${!l.isRunningNow ? 'text-amber-600' : 'text-gray-400'}">⏱ простой за смену: ${idleLabel}</div>` : '';
     // Текущая скорость линии — показываем, только пока линия реально в ходу
     // и скорость была указана при запуске («Линия поехала»); в рулонах в
     // минуту, чтобы сразу было сопоставимо с рулонами выше в этой же карточке.
     const speedLine = (l.isRunningNow && l.currentSpeedMPerMin)
-      ? `<div class="text-[8px] text-cyan-100 font-bold">🚀 скорость сейчас: ${l.currentSpeedMPerMin} м/мин (~${Math.round((l.currentSpeedMPerMin / METERS_PER_ROLL) * 10) / 10} рул./мин)</div>` : '';
+      ? `<div class="text-[8px] text-cyan-700 font-bold">🚀 скорость сейчас: ${l.currentSpeedMPerMin} м/мин (~${Math.round((l.currentSpeedMPerMin / METERS_PER_ROLL) * 10) / 10} рул./мин)</div>` : '';
     return `<div class="bg-white/10 rounded-xl p-2.5 space-y-1">
       <div class="flex items-center justify-between gap-2">
         <div class="text-[11px] font-black flex items-center gap-1.5 flex-wrap">${medals[idx] || ''} Линия ${l.n} ${milestoneBadge}${recordBadge}${streakBadge}${correctionBadge}</div>
         <div class="text-[13px] font-black">${Math.round(l.rolls)} рул.</div>
       </div>
-      ${l.printerName ? `<div class="text-[9px] text-white/80 -mt-0.5">👤 ${escapeHtmlProd(l.printerName)}</div>` : ''}
-      <div class="h-2.5 bg-white/15 rounded-full overflow-hidden">
+      ${l.printerName ? `<div class="text-[9px] text-gray-500 -mt-0.5">👤 ${escapeHtmlProd(l.printerName)}</div>` : ''}
+      <div class="h-2.5 bg-gray-100 rounded-full overflow-hidden">
         <div class="${barColor} h-full rounded-full transition-all" style="width:${pct}%"></div>
       </div>
       ${qualityLine}
@@ -22005,6 +22043,12 @@ function isKbdTypingContext(target) {
   };
   if (check(target)) return true;
   if (check(document.activeElement)) return true;
+  // В динамических строках прогноз может прийти событие от обёртки или
+  // старого target после перерисовки — явно защищаем весь блок ввода.
+  try {
+    if (target.closest && target.closest('#paint-predictor-rows')) return true;
+    if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#paint-predictor-rows')) return true;
+  } catch (e) {}
   // Если открыта любая модалка/попап (например, окно чата) — тоже считаем
   // это «печатным» контекстом и не трогаем глобальные хоткеи, независимо
   // от того, куда именно указывает фокус по мнению браузера.
