@@ -1753,6 +1753,14 @@
       <div id="printer-defect-banner-value" class="text-6xl font-black mt-1 tabular-nums leading-none">0%</div>
       <div id="printer-defect-banner-detail" class="text-[10px] font-bold text-white/65 mt-2 uppercase tracking-wide">за текущую смену · выработка ещё не начата</div>
     </div>
+    <div id="printer-shift-race-top-wrap" class="bg-gradient-to-br from-indigo-700 via-blue-700 to-cyan-600 rounded-2xl p-4 space-y-3 text-white shadow-lg overflow-hidden relative">
+      <div class="flex items-center justify-between gap-2">
+        <div class="text-[11px] font-black uppercase tracking-wide">🏁 Работа смены — все 4 линии</div>
+        <span id="printer-shift-race-top-time" class="text-[9px] font-bold text-white/70"></span>
+      </div>
+      <div id="printer-shift-race-top-personal" class="bg-white/15 rounded-xl p-3"></div>
+      <div id="printer-shift-race-top-lines" class="space-y-2"></div>
+    </div>
     <!-- ===== Заявки «Нужна краска»: печатник → колорист =====
          Отдельная лёгкая очередь поверх общей базы (поле paintRequests),
          не путать с paintAlert ("налил, забирай") — здесь наоборот, печатник
@@ -5618,6 +5626,7 @@ document.addEventListener('visibilitychange', () => {
 async function checkPaintAlertOnce() {
   const cfg = sheetDbConfig || loadSheetDbConfig();
   if (!cfg || !cfg.url) return;
+  retryPendingPaintRequests();
   const ordersRevisionAtFetch = productionOrdersRevision;
   const lineRunsRevisionAtFetch = lineRunsRevision;
   try {
@@ -6181,12 +6190,48 @@ async function submitPaintRequest() {
     renderPaintRequestsSection();
   } catch (e) {
     console.error(e);
-    toast('Не удалось отправить заявку — проверьте интернет и подключение общей базы (☁️).');
+    try {
+      const pending = JSON.parse(localStorage.getItem('paint_requests_pending_send') || '[]');
+      if (!pending.some(r => r.id === req.id)) pending.push(req);
+      localStorage.setItem('paint_requests_pending_send', JSON.stringify(pending));
+      paintRequests = [...paintRequests, req];
+      renderPaintRequestsSection();
+      toast('⚠️ Заявка сохранена на устройстве и будет отправлена автоматически при восстановлении записи в общей базе.');
+    } catch (queueError) {
+      toast('Не удалось отправить заявку: ' + (e && e.message ? e.message : 'ошибка общей базы'));
+    }
   } finally {
     if (btn) btn.disabled = false;
   }
 }
 
+let pendingPaintRetryTs = 0;
+async function retryPendingPaintRequests() {
+  if (Date.now() - pendingPaintRetryTs < 30000) return;
+  pendingPaintRetryTs = Date.now();
+  let pending;
+  try { pending = JSON.parse(localStorage.getItem('paint_requests_pending_send') || '[]'); } catch (e) { pending = []; }
+  if (!Array.isArray(pending) || !pending.length) return;
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return;
+  const remaining = [];
+  for (const req of pending) {
+    try {
+      const outcome = await pushCloudSnapshotWithRetry(remote => {
+        remote.paintRequests = Array.isArray(remote.paintRequests) ? remote.paintRequests : [];
+        if (!remote.paintRequests.some(r => r.id === req.id)) remote.paintRequests.push(req);
+        return req;
+      }, remote => Array.isArray(remote.paintRequests) && remote.paintRequests.some(r => r.id === req.id), 2);
+      if (outcome && outcome.remote && Array.isArray(outcome.remote.paintRequests) && outcome.remote.paintRequests.some(r => r.id === req.id)) {
+        paintRequests = outcome.remote.paintRequests;
+        continue;
+      }
+      remaining.push(req);
+    } catch (e) { remaining.push(req); }
+  }
+  localStorage.setItem('paint_requests_pending_send', JSON.stringify(remaining));
+  if (remaining.length !== pending.length) { renderPaintRequestsSection(); toast('✅ Отложенная заявка на краску отправлена в общую базу.'); }
+}
 async function updatePaintRequestStatus(id, newStatus) {
   const cfg = sheetDbConfig || loadSheetDbConfig();
   if (!cfg || !cfg.url) { toast('Нет подключения к общей базе (☁️).'); return null; }
@@ -15839,7 +15884,7 @@ function onPaintPredictorInput(index, field, value) {
   while (rows.length < PAINT_PREDICTOR_SECTIONS) rows.push({ section: rows.length + 1, reserve: '', poured: '', consumption: '' });
   rows[index][field] = value;
   savePaintPredictorState(rows);
-  renderPaintPredictor();
+  updatePaintPredictorLive();
 }
 function preparePredictivePaintRequest(index) {
   const rows = loadPaintPredictorState();
@@ -15854,6 +15899,32 @@ function preparePredictivePaintRequest(index) {
   const form = document.getElementById('paint-request-form');
   if (form) form.scrollIntoView({ behavior: 'smooth', block: 'center' });
   toast('Заявка подготовлена — проверьте количество и отправьте колористу.');
+}
+function updatePaintPredictorLive() {
+  const rowsEl = document.getElementById('paint-predictor-rows');
+  if (!rowsEl || rowsEl.children.length !== PAINT_PREDICTOR_SECTIONS) return;
+  const line = getLineForRunPrefix('printer');
+  const active = line ? lineRuns.find(r => normalizeLineKey(r.line) === normalizeLineKey(line) && !r.endTs) : null;
+  const speed = active && active.speedMPerMin > 0 ? active.speedMPerMin : 0;
+  const rows = loadPaintPredictorState();
+  let urgent = false, calculated = false;
+  rows.slice(0, PAINT_PREDICTOR_SECTIONS).forEach((r, i) => {
+    const reserve = parseFloat(r.reserve) || 0, poured = parseFloat(r.poured) || 0, consumption = parseFloat(r.consumption) || 0;
+    const available = reserve + poured;
+    const minutes = speed > 0 && consumption > 0 ? available / (consumption * speed / 1000) : null;
+    const minutesEl = document.getElementById('paint-predictor-minutes-' + i);
+    const statusEl = document.getElementById('paint-predictor-status-' + i);
+    const rowEl = rowsEl.children[i];
+    const alert = minutes != null && minutes <= 40;
+    if (alert) urgent = true;
+    if (minutes != null) calculated = true;
+    if (minutesEl) { minutesEl.textContent = minutes == null ? '—' : `≈ ${Math.round(minutes)} мин`; minutesEl.className = `text-[11px] font-black ${alert ? 'text-red-600' : 'text-emerald-600'}`; }
+    if (statusEl) { statusEl.innerHTML = minutes == null ? '<div class="text-[8px] text-gray-400">Заполните расход и запустите линию для прогноза.</div>' : `<div class="flex items-center justify-between text-[9px] ${alert ? 'text-red-600 font-bold' : 'text-gray-500'}"><span>${alert ? '⚠️ Краски осталось менее 40 минут' : `доступно ${available.toFixed(2)} кг`}${consumption > 0 ? ` · на 1000 рул. ≈ ${(consumption * 10.05).toFixed(2)} кг` : ''}</span><button onclick="preparePredictivePaintRequest(${i})" class="bg-blue-600 text-white px-2 py-1 rounded-lg font-black uppercase">📨 Подготовить заявку</button></div>`; }
+    if (rowEl) rowEl.classList.toggle('border-red-300', alert);
+    if (rowEl) rowEl.classList.toggle('border-amber-100', !alert);
+  });
+  const summaryEl = document.getElementById('paint-predictor-summary');
+  if (summaryEl) summaryEl.textContent = urgent ? '⚠️ Есть секции, где краску лучше заказать заранее.' : (calculated ? '✅ По текущим данным срочного пополнения не требуется.' : '');
 }
 function renderPaintPredictor() {
   const wrap = document.getElementById('paint-predictor-wrap');
@@ -15880,9 +15951,9 @@ function renderPaintPredictor() {
     const alert = minutes != null && minutes <= 40;
     const orderPaint = consumption > 0 ? consumption * 10.05 : null;
     return `<div class="bg-white rounded-xl p-2.5 border ${alert ? 'border-red-300' : 'border-amber-100'} space-y-2">
-      <div class="flex items-center justify-between"><div class="text-[10px] font-black text-gray-700">Секция ${i + 1}</div><div class="text-[11px] font-black ${alert ? 'text-red-600' : 'text-emerald-600'}">${minutes == null ? '—' : `≈ ${Math.round(minutes)} мин`}</div></div>
+      <div class="flex items-center justify-between"><div class="text-[10px] font-black text-gray-700">Секция ${i + 1}</div><div id="paint-predictor-minutes-${i}" class="text-[11px] font-black ${alert ? 'text-red-600' : 'text-emerald-600'}">${minutes == null ? '—' : `≈ ${Math.round(minutes)} мин`}</div></div>
       <div class="grid grid-cols-3 gap-1.5"><input type="number" min="0" step="0.1" value="${r.reserve || ''}" placeholder="Запас, кг" oninput="onPaintPredictorInput(${i},'reserve',this.value)" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"><input type="number" min="0" step="0.1" value="${r.poured || ''}" placeholder="Уже налили, кг" oninput="onPaintPredictorInput(${i},'poured',this.value)" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"><input type="number" min="0" step="0.01" value="${r.consumption || ''}" placeholder="Расход, кг/1000 м" oninput="onPaintPredictorInput(${i},'consumption',this.value)" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"></div>
-      ${minutes != null ? `<div class="flex items-center justify-between text-[9px] ${alert ? 'text-red-600 font-bold' : 'text-gray-500'}"><span>${alert ? '⚠️ Краски осталось менее 40 минут' : `доступно ${available.toFixed(2)} кг`}${orderPaint != null ? ` · на 1000 рул. ≈ ${orderPaint.toFixed(2)} кг` : ''}</span><button onclick="preparePredictivePaintRequest(${i})" class="bg-blue-600 text-white px-2 py-1 rounded-lg font-black uppercase">📨 Подготовить заявку</button></div>` : '<div class="text-[8px] text-gray-400">Заполните расход и запустите линию для прогноза.</div>'}</div>`;
+      <div id="paint-predictor-status-${i}">${minutes != null ? `<div class="flex items-center justify-between text-[9px] ${alert ? 'text-red-600 font-bold' : 'text-gray-500'}"><span>${alert ? '⚠️ Краски осталось менее 40 минут' : `доступно ${available.toFixed(2)} кг`}${orderPaint != null ? ` · на 1000 рул. ≈ ${orderPaint.toFixed(2)} кг` : ''}</span><button onclick="preparePredictivePaintRequest(${i})" class="bg-blue-600 text-white px-2 py-1 rounded-lg font-black uppercase">📨 Подготовить заявку</button></div>` : '<div class="text-[8px] text-gray-400">Заполните расход и запустите линию для прогноза.</div>'}</div></div>`;
   }).join('');
   const summaryEl = document.getElementById('paint-predictor-summary');
   if (summaryEl) summaryEl.textContent = summaries.some(x => x.minutes <= 40) ? '⚠️ Есть секции, где краску лучше заказать заранее.' : (summaries.length ? '✅ По текущим данным срочного пополнения не требуется.' : '');
@@ -15899,12 +15970,22 @@ function startPrinterIdleBannerTick() {
 function stopPrinterIdleBannerTick() {
   if (_printerIdleBannerTimer) { clearInterval(_printerIdleBannerTimer); _printerIdleBannerTimer = null; }
 }
+function renderPrinterPersonalTop(startMs) {
+  const el = document.getElementById('printer-shift-race-top-personal');
+  if (!el) return;
+  const profile = currentUserProfile;
+  if (!profile || profile.role !== 'senior_printer') { el.innerHTML = ''; return; }
+  const breakdown = buildOperatorShiftBreakdown(PERSONAL_STATS_LOOKBACK_MS);
+  const mine = breakdown[startMs] && breakdown[startMs][profile.name];
+  const totals = mine ? operatorNetMetersForShift(mine, startMs, profile.name) : { raw: 0, net: 0 };
+  el.innerHTML = `<div class="text-[9px] font-black uppercase text-cyan-100">👤 ${escapeHtmlProd(profile.name)} · личный результат за смену</div><div class="flex items-end justify-between gap-2 mt-1"><div><span class="text-3xl font-black">${Math.round(totals.net / METERS_PER_ROLL)}</span> <span class="text-[10px] font-bold text-white/70">чистых рул.</span></div><div class="text-right text-[9px] text-white/70">выработка ${Math.round(totals.raw / METERS_PER_ROLL)} рул.<br>брак ${Math.max(0, Math.round((1 - (totals.raw ? totals.net / totals.raw : 1)) * 1000) / 10)}%</div></div>`;
+}
 function renderShiftRace() {
   // Виджет дублируется во вкладке «Панель» (dash-shift-race-*) и во вкладке
   // «Ст. Печатник» (printer-shift-race-*) — обновляем оба набора элементов
   // одинаковым содержимым, чтобы цифры нигде не расходились.
-  const wraps = [document.getElementById('dash-shift-race-lines'), document.getElementById('printer-shift-race-lines')].filter(Boolean);
-  const timeEls = [document.getElementById('dash-shift-race-time'), document.getElementById('printer-shift-race-time')].filter(Boolean);
+  const wraps = [document.getElementById('dash-shift-race-lines'), document.getElementById('printer-shift-race-lines'), document.getElementById('printer-shift-race-top-lines')].filter(Boolean);
+  const timeEls = [document.getElementById('dash-shift-race-time'), document.getElementById('printer-shift-race-time'), document.getElementById('printer-shift-race-top-time')].filter(Boolean);
   if (!wraps.length) return;
   const { start, end, isDay } = getCurrentShiftWindow();
   const startMs = start.getTime();
@@ -15915,6 +15996,7 @@ function renderShiftRace() {
   timeEls.forEach(timeEl => { timeEl.textContent = `${isDay ? '☀️' : '🌙'} до конца ${rH} ч ${rM} мин`; });
   const nowMs = Date.now();
   const lines = computeShiftRaceLines(startMs);
+  renderPrinterPersonalTop(startMs);
   const ranked = [...lines].sort((a, b) => b.netRolls - a.netRolls);
   const leaderNet = ranked[0] ? ranked[0].netRolls : 0;
   const totalRolls = lines.reduce((s, l) => s + l.rolls, 0);
