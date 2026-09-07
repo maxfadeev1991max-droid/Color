@@ -1068,7 +1068,9 @@
   </div>
 
   <div id="view-colorist" class="p-4 space-y-6 relative">
-    <!-- Блок «Нужна краска» + калькулятор % брака перенесены во вкладку «Ст. Печатник» (см. #view-printer) -->
+    <!-- Очередь заявок динамически переносится сюда для колориста и руководителей.
+         У печатников та же карточка остаётся во вкладке «Ст. Печатник». -->
+    <div id="paint-requests-colorist-host"></div>
     <!-- ===== Блокировка вкладки «Колорист» на время внесения данных =====
          Пока колорист/начальник смены/мастер УПП вносят эталон+замес+рецепт
          по конкретной линии, старший печатник этой линии видит вкладку
@@ -1792,6 +1794,7 @@
          кнопкой "⏳ Порог простоя" над очередью).
          Блок стоит ПЕРВЫМ в вкладке — это то, с чем колорист/печатник
          работает постоянно; панель блокировки линий (ниже) нужна редко. -->
+    <div id="paint-requests-printer-host">
     <div id="paint-requests-wrap" class="hidden bg-white border border-gray-100 rounded-2xl p-4 space-y-3">
       <div id="paint-request-form" class="hidden space-y-2">
         <h3 class="text-sm font-black text-gray-800 uppercase">🧴 Нужна краска</h3>
@@ -1816,6 +1819,7 @@
           </div>
         </div>
         <button id="paint-request-submit-btn" onclick="submitPaintRequest()" class="w-full bg-blue-600 text-white py-3 rounded-2xl btn-active text-[11px] font-black uppercase">📨 Отправить заявку</button>
+        <div id="paint-request-delivery-status" class="hidden text-[9px] text-center font-bold leading-relaxed" role="status" aria-live="polite"></div>
         <div id="paint-request-mine-list" class="space-y-1.5 pt-1 max-h-56 overflow-y-auto pr-1"></div>
 
         <!-- ===== Калькулятор % брака по рулонам — отдельный вспомогательный
@@ -1886,6 +1890,7 @@
           <div id="paint-request-history-list" class="space-y-1.5 max-h-56 overflow-y-auto pr-1"></div>
         </div>
       </div>
+    </div>
     </div>
 
     <!-- ===== Прогноз остатка краски по секциям ===== -->
@@ -4639,6 +4644,9 @@ function renderUserBadge() {
   // запираем на единственном экране при каждой перерисовке бейджа
   // (вход/выход/восстановление сессии при загрузке страницы).
   applyPlainPrinterViewLock();
+  // Перемещаем очередь на рабочий экран выбранной роли сразу при входе,
+  // не дожидаясь первого фонового опроса общей базы.
+  if (typeof renderPaintRequestsSection === 'function') renderPaintRequestsSection();
 }
 
 // Раз в 30 секунд (и сразу при входе / возврате в приложение) отправляем в общую
@@ -6194,6 +6202,31 @@ function checkCancelledOwnRequests() {
   if (changed) saveCancelAlertedRequestIds(alertedCancelledRequestIds);
 }
 
+// «Успешный» HTTP-ответ ещё не означает, что Apps Script успел зафиксировать
+// запись. Пока заявка не найдена повторным чтением, храним её в устойчивой
+// локальной очереди и пытаемся доставить снова — без ложного сообщения
+// «отправлено колористу».
+function queuePendingPaintRequest(req) {
+  try {
+    const pending = JSON.parse(localStorage.getItem('paint_requests_pending_send') || '[]');
+    const list = Array.isArray(pending) ? pending : [];
+    if (!list.some(r => r && r.id === req.id)) list.push(req);
+    localStorage.setItem('paint_requests_pending_send', JSON.stringify(list));
+    return true;
+  } catch (e) {
+    console.error('Не удалось сохранить отложенную заявку на краску:', e);
+    return false;
+  }
+}
+function setPaintRequestDeliveryStatus(message, tone) {
+  const el = document.getElementById('paint-request-delivery-status');
+  if (!el) return;
+  el.textContent = message || '';
+  el.className = 'text-[9px] text-center font-bold leading-relaxed ' +
+    (tone === 'ok' ? 'text-emerald-600' : tone === 'warning' ? 'text-amber-700' : tone === 'error' ? 'text-red-600' : 'text-gray-400');
+  el.classList.toggle('hidden', !message);
+}
+
 async function submitPaintRequest() {
   if (!currentUserProfile || (currentUserProfile.role !== 'senior_printer' && currentUserProfile.role !== 'printer')) { toast('Отправить заявку может только печатник, вошедший в личный кабинет со своей линией.'); return; }
   if (!currentUserProfile.line) { toast('У вас не выбрана линия — зайдите заново в личный кабинет (👤) и укажите линию.'); return; }
@@ -6206,7 +6239,11 @@ async function submitPaintRequest() {
   const qty = (qtyEl && qtyEl.value || '').trim();
   const urgency = paintRequestUrgency || 'medium';
   const cfg = sheetDbConfig || loadSheetDbConfig();
-  if (!cfg || !cfg.url) { toast('Подключите общую базу (☁️ в шапке) — иначе колорист не увидит заявку.'); return; }
+  if (!cfg || !cfg.url) {
+    setPaintRequestDeliveryStatus('Нет подключения к общей базе: колорист пока не увидит заявку.', 'error');
+    toast('Подключите общую базу (☁️ в шапке) — иначе колорист не увидит заявку.');
+    return;
+  }
   const btn = document.getElementById('paint-request-submit-btn');
   if (btn) btn.disabled = true;
   const req = {
@@ -6218,6 +6255,7 @@ async function submitPaintRequest() {
     status: 'pending'
   };
   try {
+    setPaintRequestDeliveryStatus('Отправляем заявку в общую очередь…', 'neutral');
     const outcome = await pushCloudSnapshotWithRetry(
       (remote) => {
         remote.paintRequests = Array.isArray(remote.paintRequests) ? remote.paintRequests : [];
@@ -6228,13 +6266,25 @@ async function submitPaintRequest() {
       (remote) => Array.isArray(remote.paintRequests) && remote.paintRequests.some(r => r.id === req.id),
       8
     );
-    paintRequests = (outcome.remote && Array.isArray(outcome.remote.paintRequests) && outcome.remote.paintRequests.some(r => r.id === req.id))
+    // В outcome.remote после неудачной проверки может остаться именно тот
+    // объект, который мы пытались записать. Это не подтверждение доставки.
+    const confirmed = !outcome.unverified && outcome.remote &&
+      Array.isArray(outcome.remote.paintRequests) && outcome.remote.paintRequests.some(r => r.id === req.id);
+    paintRequests = confirmed
       ? outcome.remote.paintRequests
-      : [...paintRequests, req]; // сервер ещё не подтвердил — показываем свою заявку сразу, не дожидаясь ответа
-    if (outcome.unverified) {
-      toast('✅ Заявка отправлена — линия ' + currentUserProfile.line + ' (обновление базы чуть задержалось, но заявка ушла)');
-    } else {
+      : (paintRequests.some(r => r.id === req.id) ? paintRequests : [...paintRequests, req]);
+    if (confirmed) {
+      markSyncSuccess();
+      setPaintRequestDeliveryStatus('✅ Заявка подтверждена в общей очереди колориста.', 'ok');
       toast('✅ Заявка на «' + article + '» отправлена колористу — линия ' + currentUserProfile.line);
+    } else {
+      const queued = queuePendingPaintRequest(req);
+      setPaintRequestDeliveryStatus(queued
+        ? '⚠️ Сервер не подтвердил доставку. Заявка сохранена и будет отправляться повторно.'
+        : '❌ Сервер не подтвердил доставку, а локально сохранить заявку не удалось.', queued ? 'warning' : 'error');
+      toast(queued
+        ? '⚠️ Доставка заявки ещё не подтверждена. Она сохранена на устройстве и будет отправлена повторно.'
+        : 'Не удалось подтвердить доставку заявки. Не закрывайте приложение и повторите отправку.');
     }
     if (articleEl) articleEl.value = '';
     if (noteEl) noteEl.value = '';
@@ -6245,13 +6295,14 @@ async function submitPaintRequest() {
   } catch (e) {
     console.error(e);
     try {
-      const pending = JSON.parse(localStorage.getItem('paint_requests_pending_send') || '[]');
-      if (!pending.some(r => r.id === req.id)) pending.push(req);
-      localStorage.setItem('paint_requests_pending_send', JSON.stringify(pending));
+      const queued = queuePendingPaintRequest(req);
+      if (!queued) throw new Error('Не удалось сохранить заявку на устройстве');
       paintRequests = [...paintRequests, req];
       renderPaintRequestsSection();
+      setPaintRequestDeliveryStatus('⚠️ Заявка сохранена на устройстве и будет отправляться повторно.', 'warning');
       toast('⚠️ Заявка сохранена на устройстве и будет отправлена автоматически при восстановлении записи в общей базе.');
     } catch (queueError) {
+      setPaintRequestDeliveryStatus('❌ Не удалось сохранить заявку для повторной отправки.', 'error');
       toast('Не удалось отправить заявку: ' + (e && e.message ? e.message : 'ошибка общей базы'));
     }
   } finally {
@@ -6275,9 +6326,16 @@ async function retryPendingPaintRequests() {
         remote.paintRequests = Array.isArray(remote.paintRequests) ? remote.paintRequests : [];
         if (!remote.paintRequests.some(r => r.id === req.id)) remote.paintRequests.push(req);
         return req;
-      }, remote => Array.isArray(remote.paintRequests) && remote.paintRequests.some(r => r.id === req.id), 2);
-      if (outcome && outcome.remote && Array.isArray(outcome.remote.paintRequests) && outcome.remote.paintRequests.some(r => r.id === req.id)) {
+      }, remote => Array.isArray(remote.paintRequests) && remote.paintRequests.some(r => r.id === req.id), 8);
+      // Не удаляем локальную копию, пока запись не подтверждена отдельным
+      // чтением из общей базы. При outcome.unverified в remote может быть
+      // только снимок, подготовленный к POST, а не фактически сохранённые данные.
+      const confirmed = outcome && !outcome.unverified && outcome.remote &&
+        Array.isArray(outcome.remote.paintRequests) && outcome.remote.paintRequests.some(r => r.id === req.id);
+      if (confirmed) {
         paintRequests = outcome.remote.paintRequests;
+        markSyncSuccess();
+        setPaintRequestDeliveryStatus('✅ Отложенная заявка подтверждена в общей очереди колориста.', 'ok');
         continue;
       }
       remaining.push(req);
@@ -6685,12 +6743,20 @@ function renderPaintRequestsSection() {
   const wrap = document.getElementById('paint-requests-wrap');
   if (!wrap) return;
   const role = currentUserProfile && currentUserProfile.role;
+  // Карточка одна для всех ролей, но её расположение должно совпадать с
+  // рабочим экраном: печатник заказывает во вкладке «Ст. Печатник», а
+  // колорист видит и обрабатывает очередь прямо во вкладке «Колорист».
+  // Раньше очередь рендерилась, но оставалась на скрытой вкладке печатника;
+  // из-за этого у колориста создавалось впечатление, что заявка не пришла.
+  const isPrinterRole = role === 'senior_printer' || role === 'printer';
+  const host = document.getElementById(isPrinterRole ? 'paint-requests-printer-host' : 'paint-requests-colorist-host');
+  if (host && wrap.parentElement !== host) host.appendChild(wrap);
   if (!currentUserProfile) { wrap.classList.add('hidden'); updateColoristTabBadge(); return; }
   // Держим обзор "успевают ли колористы" в панели начальника смены свежим
   // при любом изменении заявок «Нужна краска», а не только по таймеру опроса.
   if (role === 'shift_lead' && typeof renderLeadColoristStats === 'function') renderLeadColoristStats();
 
-  if (role === 'senior_printer' || role === 'printer') {
+  if (isPrinterRole) {
     wrap.classList.remove('hidden');
     document.getElementById('paint-request-form').classList.remove('hidden');
     document.getElementById('paint-request-queue').classList.add('hidden');
