@@ -850,7 +850,7 @@
     background: #fff !important;
     color: #374151 !important;
     border: 1px solid #f3f4f6 !important;
-    box-shadow: 0 2px 8px rgba(15,23,42,.05) !important;
+    box-shadow: none !important;
   }
   #dash-shift-race-lines, #printer-shift-race-lines {
     max-height: 330px;
@@ -1773,7 +1773,7 @@
       <div id="printer-defect-banner-value" class="text-6xl font-black mt-1 tabular-nums leading-none">0%</div>
       <div id="printer-defect-banner-detail" class="text-[10px] font-bold text-white/65 mt-2 uppercase tracking-wide">за текущую смену · выработка ещё не начата</div>
     </div>
-    <div id="printer-shift-race-top-wrap" class="bg-white border border-gray-100 rounded-2xl p-3 space-y-2 text-gray-700 shadow-sm overflow-hidden relative">
+    <div id="printer-shift-race-top-wrap" class="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
       <div class="flex items-center justify-between gap-2">
         <div class="text-[11px] font-black uppercase tracking-wide">🏁 Работа смены — все 4 линии</div>
         <span id="printer-shift-race-top-time" class="text-[9px] font-bold text-white/70"></span>
@@ -1901,7 +1901,7 @@
     <!-- Клон виджета "Работа смены" (оригинал — во вкладке «Панель», см.
          #dash-shift-race-wrap). renderShiftRace() обновляет оба набора
          элементов одновременно (см. функцию в JS). -->
-    <div id="printer-shift-race-wrap" class="bg-white border border-gray-100 rounded-2xl p-3 space-y-2 text-gray-700 shadow-sm overflow-hidden relative">
+    <div id="printer-shift-race-wrap" class="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
       <div class="flex items-center justify-between gap-2">
         <div class="text-[11px] font-black uppercase tracking-wide flex items-center gap-1.5">🏁 Работа смены</div>
         <span id="printer-shift-race-time" class="text-[9px] font-bold text-gray-400"></span>
@@ -2608,7 +2608,7 @@
   <!-- Работа смены — видно ВСЕМ ролям сразу, сверху (как и «Статус линий
        сейчас»), чтобы и печатник, и начальник смены с первого взгляда видели,
        кто сколько уже выкатал рулонов за текущую смену и кто кого догоняет. -->
-  <div id="dash-shift-race-wrap" class="bg-white border border-gray-100 rounded-2xl p-3 space-y-2 text-gray-700 shadow-sm overflow-hidden relative">
+  <div id="dash-shift-race-wrap" class="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
     <div class="flex items-center justify-between gap-2">
       <div class="text-[11px] font-black uppercase tracking-wide flex items-center gap-1.5">🏁 Работа смены</div>
       <span id="dash-shift-race-time" class="text-[9px] font-bold text-gray-400"></span>
@@ -4168,28 +4168,38 @@ function pinFreshLocalFields(remote) {
 }
 const CLOUD_PUSH_SKIP = Symbol('cloud-push-skip');
 async function pushCloudSnapshotWithRetry(mutateFn, verifyFn, maxAttempts) {
-  maxAttempts = maxAttempts || 4;
+  // Apps Script может вернуть «Таблица занята другой записью» при
+  // одновременной фоновой синхронизации. Раньше исключение сразу улетало
+  // наружу, поэтому заявка попадала только в локальную очередь. Повторяем
+  // запись с увеличивающейся паузой и только после всех попыток сообщаем сбой.
+  maxAttempts = maxAttempts || 6;
   let lastRemote = null;
+  let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const remote = await fetchCloudSnapshot();
-    if (!remote) throw new Error('Нет ответа от таблицы');
-    const result = mutateFn(remote);
-    if (result === CLOUD_PUSH_SKIP) return { remote, result: null, skipped: true };
-    await pushCloudSnapshot(remote);
-    lastRemote = remote;
-    if (!verifyFn) return { remote, result };
-    // Google Таблице через Apps Script нужно время, чтобы запись стала видна
-    // при следующем чтении — небольшая пауза ПЕРЕД проверкой снижает ложные
-    // "не удалось подтвердить", когда заявка на самом деле уже сохранилась.
-    await new Promise(r => setTimeout(r, 600));
-    const check = await fetchCloudSnapshot();
-    if (check && verifyFn(check)) return { remote: check, result };
-    lastRemote = check || remote;
-    await new Promise(r => setTimeout(r, 250 + Math.random() * 250));
+    try {
+      const remote = await fetchCloudSnapshot();
+      if (!remote) throw new Error('Нет ответа от таблицы');
+      const result = mutateFn(remote);
+      if (result === CLOUD_PUSH_SKIP) return { remote, result: null, skipped: true };
+      await pushCloudSnapshot(remote);
+      lastRemote = remote;
+      if (!verifyFn) return { remote, result };
+      await new Promise(r => setTimeout(r, 600));
+      const check = await fetchCloudSnapshot();
+      if (check && verifyFn(check)) return { remote: check, result };
+      lastRemote = check || remote;
+    } catch (e) {
+      lastError = e;
+      console.warn('[cloud] попытка записи ' + attempt + '/' + maxAttempts + ' не удалась:', e && e.message ? e.message : e);
+    }
+    if (attempt < maxAttempts) {
+      const delay = Math.min(4000, 400 * Math.pow(1.7, attempt - 1)) + Math.random() * 350;
+      await new Promise(r => setTimeout(r, delay));
+    }
   }
-  return { remote: lastRemote, result: null, unverified: true };
+  if (lastRemote && verifyFn) return { remote: lastRemote, result: null, unverified: true };
+  throw lastError || new Error('Не удалось записать данные в общую базу');
 }
-
 // Временная диагностика: шлёт крошечное тестовое фото на уже подключённый
 // (и заведомо рабочий, раз обычная синхронизация работает) URL Apps Script
 // и показывает точный ответ сервера — без ручного копирования ссылок.
@@ -6206,7 +6216,8 @@ async function submitPaintRequest() {
         if (!remote.paintRequests.some(r => r.id === req.id)) remote.paintRequests.push(req);
         return req;
       },
-      (remote) => Array.isArray(remote.paintRequests) && remote.paintRequests.some(r => r.id === req.id)
+      (remote) => Array.isArray(remote.paintRequests) && remote.paintRequests.some(r => r.id === req.id),
+      8
     );
     paintRequests = (outcome.remote && Array.isArray(outcome.remote.paintRequests) && outcome.remote.paintRequests.some(r => r.id === req.id))
       ? outcome.remote.paintRequests
@@ -16028,7 +16039,6 @@ function renderShiftRace() {
   const { start, end, isDay } = getCurrentShiftWindow();
   const startMs = start.getTime();
   renderPrinterDefectBanner();
-  renderPaintPredictor();
   const remainingMin = Math.max(0, Math.round((end.getTime() - Date.now()) / 60000));
   const rH = Math.floor(remainingMin / 60), rM = remainingMin % 60;
   timeEls.forEach(timeEl => { timeEl.textContent = `${isDay ? '☀️' : '🌙'} до конца ${rH} ч ${rM} мин`; });
