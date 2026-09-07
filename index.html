@@ -1866,7 +1866,7 @@
         <div class="text-[11px] font-black uppercase text-amber-800">🧴 Прогноз краски по секциям</div>
         <span id="paint-predictor-speed" class="text-[9px] font-bold text-amber-700"></span>
       </div>
-      <p class="text-[9px] text-amber-700 leading-relaxed -mt-1">Введите запас в ведре, сколько уже залили в секцию и расход по рецепту. Приложение пересчитает, на сколько минут хватит краски при текущей скорости линии.</p>
+      <p class="text-[9px] text-amber-700 leading-relaxed -mt-1">Введите данные по 8 секциям: запас в ведре, сколько уже залили и расход по рецепту. Ориентир типового заказа: <b>1000 рулонов = 10&nbsp;050 м</b>. Приложение пересчитает, на сколько минут хватит краски при текущей скорости линии.</p>
       <div id="paint-predictor-rows" class="space-y-2"></div>
       <div id="paint-predictor-summary" class="text-[9px] text-amber-800 font-bold"></div>
     </div>
@@ -15499,13 +15499,16 @@ function startLineRun(prefix) {
   if (selEl && selEl.value && selEl.value !== '__manual__') article = selEl.value.trim();
   else article = (manualEl && manualEl.value || '').trim();
   const speedEl = document.getElementById('dash-linerun-speed-' + prefix);
+  const offsetEl = document.getElementById('dash-linerun-offset-' + prefix);
   const launchWasteEl = document.getElementById('dash-linerun-launch-waste-' + prefix);
   const speed = speedEl ? parseFloat(speedEl.value) : NaN;
+  const offsetRolls = offsetEl ? parseFloat((offsetEl.value || '').replace(',', '.')) : NaN;
+  const offsetMeters = !isNaN(offsetRolls) && offsetRolls > 0 ? Math.round(offsetRolls * METERS_PER_ROLL * 10) / 10 : 0;
   const launchWasteInput = launchWasteEl ? parseFloat((launchWasteEl.value || '').replace(',', '.')) : NaN;
   const launchWasteMeters = !isNaN(launchWasteInput) && launchWasteInput > 0 ? Math.round(launchWasteInput * 10) / 10 : 0;
   if (!article) { toast('Укажите артикул, который сейчас идёт на линии.'); return; }
   if (lineRuns.some(r => String(r.line) === line && !r.endTs)) { toast('На этой линии уже идёт учёт хода — сначала завершите текущий артикул.'); return; }
-  const newRun = { id: 'lr' + Date.now(), line, article, startTs: Date.now(), endTs: null, speedMPerMin: isNaN(speed) ? null : speed, offsetMeters: 0, launchWasteMeters, meters: 0, rolls: 0, pallets: 0, createdBy: currentUserProfile.name, role: currentUserProfile.role };
+  const newRun = { id: 'lr' + Date.now(), line, article, startTs: Date.now(), endTs: null, speedMPerMin: isNaN(speed) ? null : speed, offsetMeters, launchWasteMeters, meters: 0, rolls: 0, pallets: 0, createdBy: currentUserProfile.name, role: currentUserProfile.role };
   lineRuns.push(newRun);
   saveLineRuns(lineRuns);
   markLineRunPending(newRun.id);
@@ -15603,9 +15606,9 @@ function stopLineRun(prefix, id) {
   run.endTs = Date.now();
   const minutes = (run.endTs - run.startTs) / 60000;
   const speed = run.speedMPerMin || 0;
-  // Метры, ушедшие на запуск/приладку, являются браком и не входят
-  // в качественную выработку артикула.
-  run.meters = Math.round((speed * minutes) * 10) / 10;
+  // Начальная выработка остаётся качественным метражом, а launchWasteMeters
+  // хранится отдельно и используется только в расчёте процента брака.
+  run.meters = Math.round(((run.offsetMeters || 0) + speed * minutes) * 10) / 10;
   run.rolls = Math.round(run.meters / METERS_PER_ROLL * 10) / 10;
   run.pallets = Math.round(run.rolls / ROLLS_PER_PALLET * 100) / 100;
   saveLineRuns(lineRuns);
@@ -15812,7 +15815,8 @@ function renderPrinterDefectBanner() {
   const active = line ? lineRuns.find(r => normalizeLineKey(r.line) === normalizeLineKey(line) && !r.endTs) : null;
   const launchWasteMeters = active ? (parseFloat(active.launchWasteMeters) || 0) : 0;
   const elapsedMinutes = active ? Math.max(0, (Date.now() - active.startTs) / 60000) : 0;
-  const goodMeters = active && active.speedMPerMin > 0 ? active.speedMPerMin * elapsedMinutes : 0;
+  const startingGoodMeters = active ? (parseFloat(active.offsetMeters) || 0) : 0;
+  const goodMeters = active ? startingGoodMeters + (active.speedMPerMin > 0 ? active.speedMPerMin * elapsedMinutes : 0) : 0;
   const totalPaperMeters = launchWasteMeters + goodMeters;
   const defectPct = totalPaperMeters > 0 ? (launchWasteMeters / totalPaperMeters) * 100 : 0;
   const shownPct = Math.round(defectPct * 10) / 10;
@@ -15825,13 +15829,14 @@ function renderPrinterDefectBanner() {
     : 'запустите артикул и внесите метры бумаги на запуск';
 }
 const PAINT_PREDICTOR_KEY = 'paint_predictor_sections_v1';
+const PAINT_PREDICTOR_SECTIONS = 8;
 function loadPaintPredictorState() {
   try { return JSON.parse(localStorage.getItem(PAINT_PREDICTOR_KEY) || '[]'); } catch (e) { return []; }
 }
 function savePaintPredictorState(rows) { localStorage.setItem(PAINT_PREDICTOR_KEY, JSON.stringify(rows)); }
 function onPaintPredictorInput(index, field, value) {
   const rows = loadPaintPredictorState();
-  while (rows.length < 4) rows.push({ section: rows.length + 1, reserve: '', poured: '', consumption: '' });
+  while (rows.length < PAINT_PREDICTOR_SECTIONS) rows.push({ section: rows.length + 1, reserve: '', poured: '', consumption: '' });
   rows[index][field] = value;
   savePaintPredictorState(rows);
   renderPaintPredictor();
@@ -15863,7 +15868,7 @@ function renderPaintPredictor() {
   const speedEl = document.getElementById('paint-predictor-speed');
   if (speedEl) speedEl.textContent = speed ? `линия ${line} · ${speed} м/мин · ${active.article}` : 'запустите артикул, чтобы получить прогноз';
   const rows = loadPaintPredictorState();
-  while (rows.length < 4) rows.push({ section: rows.length + 1, reserve: '', poured: '', consumption: '' });
+  while (rows.length < PAINT_PREDICTOR_SECTIONS) rows.push({ section: rows.length + 1, reserve: '', poured: '', consumption: '' });
   savePaintPredictorState(rows);
   const summaries = [];
   rowsEl.innerHTML = rows.map((r, i) => {
@@ -15873,10 +15878,11 @@ function renderPaintPredictor() {
     r.minutes = minutes == null ? '' : Math.round(minutes * 10) / 10;
     if (minutes != null) summaries.push({ i, minutes });
     const alert = minutes != null && minutes <= 40;
+    const orderPaint = consumption > 0 ? consumption * 10.05 : null;
     return `<div class="bg-white rounded-xl p-2.5 border ${alert ? 'border-red-300' : 'border-amber-100'} space-y-2">
       <div class="flex items-center justify-between"><div class="text-[10px] font-black text-gray-700">Секция ${i + 1}</div><div class="text-[11px] font-black ${alert ? 'text-red-600' : 'text-emerald-600'}">${minutes == null ? '—' : `≈ ${Math.round(minutes)} мин`}</div></div>
       <div class="grid grid-cols-3 gap-1.5"><input type="number" min="0" step="0.1" value="${r.reserve || ''}" placeholder="Запас, кг" oninput="onPaintPredictorInput(${i},'reserve',this.value)" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"><input type="number" min="0" step="0.1" value="${r.poured || ''}" placeholder="Уже налили, кг" oninput="onPaintPredictorInput(${i},'poured',this.value)" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"><input type="number" min="0" step="0.01" value="${r.consumption || ''}" placeholder="Расход, кг/1000 м" oninput="onPaintPredictorInput(${i},'consumption',this.value)" class="p-2 bg-gray-50 rounded-lg text-[10px] font-bold outline-none"></div>
-      ${minutes != null ? `<div class="flex items-center justify-between text-[9px] ${alert ? 'text-red-600 font-bold' : 'text-gray-500'}"><span>${alert ? '⚠️ Краски осталось менее 40 минут' : `доступно ${available.toFixed(2)} кг`}</span><button onclick="preparePredictivePaintRequest(${i})" class="bg-blue-600 text-white px-2 py-1 rounded-lg font-black uppercase">📨 Подготовить заявку</button></div>` : '<div class="text-[8px] text-gray-400">Заполните расход и запустите линию для прогноза.</div>'}</div>`;
+      ${minutes != null ? `<div class="flex items-center justify-between text-[9px] ${alert ? 'text-red-600 font-bold' : 'text-gray-500'}"><span>${alert ? '⚠️ Краски осталось менее 40 минут' : `доступно ${available.toFixed(2)} кг`}${orderPaint != null ? ` · на 1000 рул. ≈ ${orderPaint.toFixed(2)} кг` : ''}</span><button onclick="preparePredictivePaintRequest(${i})" class="bg-blue-600 text-white px-2 py-1 rounded-lg font-black uppercase">📨 Подготовить заявку</button></div>` : '<div class="text-[8px] text-gray-400">Заполните расход и запустите линию для прогноза.</div>'}</div>`;
   }).join('');
   const summaryEl = document.getElementById('paint-predictor-summary');
   if (summaryEl) summaryEl.textContent = summaries.some(x => x.minutes <= 40) ? '⚠️ Есть секции, где краску лучше заказать заранее.' : (summaries.length ? '✅ По текущим данным срочного пополнения не требуется.' : '');
@@ -16730,6 +16736,7 @@ function renderLineRunCard(prefix, passive) {
       <div class="space-y-1.5">
         ${selectHtml}
         <input type="number" id="dash-linerun-speed-${prefix}" placeholder="Скорость линии, м/мин" class="w-full p-2.5 bg-gray-50 rounded-xl outline-none text-[11px] font-bold">
+        <input type="number" id="dash-linerun-offset-${prefix}" min="0" step="0.1" placeholder="Уже сделано на начало смены, рулонов (необязательно)" class="w-full p-2.5 bg-gray-50 rounded-xl outline-none text-[11px] font-bold">
         <input type="number" id="dash-linerun-launch-waste-${prefix}" min="0" step="0.1" placeholder="Бумага на запуск/приладку, метров" class="w-full p-2.5 bg-amber-50 rounded-xl outline-none text-[11px] font-bold border border-amber-100">
         <button onclick="startLineRun('${prefix}')" class="w-full bg-emerald-600 text-white py-2.5 rounded-xl font-black uppercase text-[10px] btn-active">▶️ Линия поехала</button>
       </div>
