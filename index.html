@@ -4019,11 +4019,21 @@ function saveSheetDbConfig(cfg) {
 // — иначе браузер шлёт CORS preflight (OPTIONS), который Apps Script не
 // обрабатывает, и запрос падает. Тело остаётся JSON-строкой, Apps Script сам
 // разбирает e.postData.contents через JSON.parse.
+// Apps Script/браузер иногда оставляет fetch в pending навсегда (особенно
+// после пробуждения компьютера или при старом соединении). Без таймаута это
+// блокировало cloudWriteQueue, и кнопка «Отправить заявку» навсегда зависала
+// на «Отправляем заявку в общую очередь…».
+function fetchCloudWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || 15000);
+  const requestOptions = Object.assign({}, options || {}, { signal: controller.signal, cache: 'no-store' });
+  return fetch(url, requestOptions).finally(() => clearTimeout(timer));
+}
 async function fetchCloudSnapshot() {
   const cfg = sheetDbConfig || loadSheetDbConfig();
   if (!cfg || !cfg.url) return null;
   const joiner = cfg.url.includes('?') ? '&' : '?';
-  const resp = await fetch(cfg.url + joiner + 'action=get&t=' + Date.now());
+  const resp = await fetchCloudWithTimeout(cfg.url + joiner + 'action=get&t=' + Date.now(), null, 15000);
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   const responseText = await resp.text();
   let data;
@@ -4072,10 +4082,10 @@ async function pushCloudSnapshot(record) {
   // объяснение у pinFreshLocalFields ниже), а не полагаемся на то, что
   // каждое из десятков мест кода не забудет сделать это само.
   if (typeof pinFreshLocalFields === 'function') pinFreshLocalFields(record);
-  const resp = await fetch(cfg.url, {
+  const resp = await fetchCloudWithTimeout(cfg.url, {
     method: 'POST',
     body: JSON.stringify({ action: 'put', payload: record })
-  });
+  }, 15000);
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   // Apps Script иногда возвращает пустой ответ или текст вместо JSON
   // (например, после редиректа/холодного старта). HTTP 2xx в этом случае
@@ -4198,7 +4208,7 @@ async function pushCloudSnapshotWithRetryUnlocked(mutateFn, verifyFn, maxAttempt
       await pushCloudSnapshot(remote);
       lastRemote = remote;
       if (!verifyFn) return { remote, result };
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 350));
       const check = await fetchCloudSnapshot();
       if (check && verifyFn(check)) return { remote: check, result };
       lastRemote = check || remote;
@@ -4207,7 +4217,7 @@ async function pushCloudSnapshotWithRetryUnlocked(mutateFn, verifyFn, maxAttempt
       console.warn('[cloud] попытка записи ' + attempt + '/' + maxAttempts + ' не удалась:', e && e.message ? e.message : e);
     }
     if (attempt < maxAttempts) {
-      const delay = Math.min(4000, 400 * Math.pow(1.7, attempt - 1)) + Math.random() * 350;
+      const delay = Math.min(2500, 350 * Math.pow(1.7, attempt - 1)) + Math.random() * 250;
       await new Promise(r => setTimeout(r, delay));
     }
   }
@@ -6263,19 +6273,20 @@ async function submitPaintRequest() {
         if (!remote.paintRequests.some(r => r.id === req.id)) remote.paintRequests.push(req);
         return req;
       },
-      (remote) => Array.isArray(remote.paintRequests) && remote.paintRequests.some(r => r.id === req.id),
-      8
+      // Для заявки достаточно подтверждённого HTTP-ответа POST. Повторное
+      // чтение всего снимка здесь убираем: оно могло зависать на большой
+      // таблице и держать кнопку в состоянии «Отправляем…». Колорист
+      // увидит запись при ближайшем опросе общей очереди.
+      null,
+      1
     );
-    // В outcome.remote после неудачной проверки может остаться именно тот
-    // объект, который мы пытались записать. Это не подтверждение доставки.
-    const confirmed = !outcome.unverified && outcome.remote &&
-      Array.isArray(outcome.remote.paintRequests) && outcome.remote.paintRequests.some(r => r.id === req.id);
+    const confirmed = !!outcome && !outcome.skipped;
     paintRequests = confirmed
       ? outcome.remote.paintRequests
       : (paintRequests.some(r => r.id === req.id) ? paintRequests : [...paintRequests, req]);
     if (confirmed) {
       markSyncSuccess();
-      setPaintRequestDeliveryStatus('✅ Заявка подтверждена в общей очереди колориста.', 'ok');
+      setPaintRequestDeliveryStatus('✅ Заявка отправлена в общую очередь колориста.', 'ok');
       toast('✅ Заявка на «' + article + '» отправлена колористу — линия ' + currentUserProfile.line);
     } else {
       const queued = queuePendingPaintRequest(req);
@@ -6326,7 +6337,7 @@ async function retryPendingPaintRequests() {
         remote.paintRequests = Array.isArray(remote.paintRequests) ? remote.paintRequests : [];
         if (!remote.paintRequests.some(r => r.id === req.id)) remote.paintRequests.push(req);
         return req;
-      }, remote => Array.isArray(remote.paintRequests) && remote.paintRequests.some(r => r.id === req.id), 8);
+      }, remote => Array.isArray(remote.paintRequests) && remote.paintRequests.some(r => r.id === req.id), 3);
       // Не удаляем локальную копию, пока запись не подтверждена отдельным
       // чтением из общей базы. При outcome.unverified в remote может быть
       // только снимок, подготовленный к POST, а не фактически сохранённые данные.
