@@ -964,6 +964,8 @@
                  выйти из учётной записи. Кликабельно для всех ролей. -->
             <span id="header-compact-user" onclick="openLoginModal()" style="cursor:pointer;text-decoration:underline;text-underline-offset:2px;" title="Личный кабинет / выход">👤 Войти</span>
             <span id="header-compact-sync" title="Статус общей базы">🔴</span>
+            <span id="header-net-status" title="Сеть" style="cursor:help">🟢</span>
+            <span id="header-cv-status" title="Модель компьютерного зрения (подсказка «похоже на фото»)" style="cursor:help">⚪ CV</span>
           </span>
           <button onclick="openPaintLineModal()" id="paint-poured-btn" class="hidden text-white text-[9px] font-black uppercase leading-none px-2 py-1.5 bg-green-600 rounded-lg shrink-0" title="Сообщить печатнику и начальнику смены, что краска налита">🎨 Налил</button>
           <button onclick="openTestPaintLineModal()" id="test-paint-poured-btn" class="hidden text-white text-[9px] font-black uppercase leading-none px-2 py-1.5 bg-purple-600 rounded-lg shrink-0" title="Сообщить печатнику и начальнику смены, что тестовая краска налита">🧪 Тест налит</button>
@@ -4141,6 +4143,7 @@ const PROD_STORE = 'production_batches'; // Производство и конт
 const VISION_STORE = 'vision_defects'; // Контроль брака (CV): подтверждённые события отклонения цвета/текстуры от камеры над линией
 const SHIFT_STORE = 'shifts'; // Журнал смен: начало/конец смены, заметки начальника смены, счётчик брака за смену
 const LEARNING_STORE = 'correction_learning'; // Обучение на данных: журнал попыток коррекции "было → стало" (см. блок ниже возле precedentCases)
+const PASSPORT_STORE = 'batch_passports'; // Электронные паспорта партий (Aspect Copilot) — раньше жили только в localStorage
 let precedentCases = []; // растущая база реальных прецедентов, подгружается из IndexedDB
 let correctionAttempts = []; // растущий журнал попыток коррекции (успех/неуспех) — см. "Обучение на ваших данных" ниже
 let lastLoadedRecipes = []; // последний отрисованный список рецептов Библиотеки/поиска по цвету — по нему кликами подгружаем рецепт в форму
@@ -4482,6 +4485,25 @@ const SHEETDB_DEFAULT_CONFIG = {
   url: 'https://script.google.com/macros/s/AKfycbxFmekUSpUrOM5a-ldeg39IUy2r5GnYB-fxv9uZUnLF08_3HHnHiSayOsThfv6c5g/exec'
 };
 
+</script>
+<script>
+/* inlined aspect-cloud-sync.js */
+/* aspect-cloud-sync.js — ядро общей базы (fetch/push снимка)
+ * Глобалы, которые задаёт основной HTML до или рядом:
+ *   sheetDbConfig, SHEETDB_CONFIG_KEY, SHEETDB_DEFAULT_CONFIG
+ * Если HTML подключает этот файл после объявления этих имён — всё ок.
+ * Если файл один (standalone) — ниже есть fallback-объявления.
+ */
+if (typeof SHEETDB_CONFIG_KEY === 'undefined') {
+  var SHEETDB_CONFIG_KEY = 'colorist_sheetdb_config';
+}
+if (typeof sheetDbConfig === 'undefined') {
+  var sheetDbConfig = null;
+}
+if (typeof SHEETDB_DEFAULT_CONFIG === 'undefined') {
+  var SHEETDB_DEFAULT_CONFIG = { url: '' };
+}
+
 function loadSheetDbConfig() {
   try {
     const raw = localStorage.getItem(SHEETDB_CONFIG_KEY);
@@ -4652,6 +4674,28 @@ async function pushCloudSnapshot(record) {
   // объяснение у pinFreshLocalFields ниже), а не полагаемся на то, что
   // каждое из десятков мест кода не забудет сделать это само.
   if (typeof pinFreshLocalFields === 'function') pinFreshLocalFields(record);
+  // Метка устройства: кто записал снимок. Не криптоподпись, но позволяет
+  // на сервере отфильтровать мусор от неизвестных клиентов и разбирать
+  // конфликты «кто перетёр». sharedSecret из конфига базы, если задан.
+  try {
+    const deviceId = (typeof getFedDeviceId === 'function') ? getFedDeviceId() : null;
+    record._meta = Object.assign({}, record._meta || {}, {
+      deviceId: deviceId || 'unknown',
+      writtenAt: new Date().toISOString(),
+      app: 'aspect-ru',
+      schemaHint: 1
+    });
+    if (cfg.sharedSecret) {
+      // Простой HMAC-подобный токен без внешних библиотек: hash(deviceId + secret + writtenAt)
+      const raw = String(deviceId || '') + '|' + String(cfg.sharedSecret) + '|' + record._meta.writtenAt;
+      let h = 2166136261;
+      for (let i = 0; i < raw.length; i++) {
+        h ^= raw.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      record._meta.writeToken = (h >>> 0).toString(16);
+    }
+  } catch (e) { /* метка необязательна — не ломаем синк */ }
   const resp = await fetchCloudWithTimeout(cfg.url, {
     method: 'POST',
     body: JSON.stringify({ action: 'put', payload: record })
@@ -4683,6 +4727,8 @@ async function pushCloudSnapshot(record) {
 // как и везде в остальном приложении. Отсюда и жалобы «удалено локально, но
 // не удалось удалить в общей базе» / «signal is aborted without reason» при
 // нескольких одновременно открытых устройствах в цехе.
+
+// ---- Очередь записи и точечный POST с повторами ----
 async function postToCloudWithRetry(cfg, body, maxAttempts) {
   maxAttempts = maxAttempts || 3;
   let lastError = null;
@@ -4713,6 +4759,267 @@ async function postToCloudWithRetry(cfg, body, maxAttempts) {
   throw lastError || new Error('Не удалось выполнить запрос к общей базе');
 }
 
+
+// Все операции read-modify-write к одной Google Таблице выполняются
+// последовательно. Иначе параллельный heartbeat/ход линии мог прочитать
+// старый снимок и затереть только что добавленную заявку колористу.
+var CLOUD_PUSH_SKIP = Symbol('cloud-push-skip');
+let cloudWriteQueue = Promise.resolve();
+function pushCloudSnapshotWithRetry(mutateFn, verifyFn, maxAttempts) {
+  const run = cloudWriteQueue.then(() => pushCloudSnapshotWithRetryUnlocked(mutateFn, verifyFn, maxAttempts));
+  cloudWriteQueue = run.catch(() => {});
+  return run;
+}
+async function pushCloudSnapshotWithRetryUnlocked(mutateFn, verifyFn, maxAttempts) {
+  // Apps Script может вернуть «Таблица занята другой записью» при
+  // одновременной фоновой синхронизации. Раньше исключение сразу улетало
+  // наружу, поэтому заявка попадала только в локальную очередь. Повторяем
+  // запись с увеличивающейся паузой и только после всех попыток сообщаем сбой.
+  maxAttempts = maxAttempts || 6;
+  let lastRemote = null;
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const remote = await fetchCloudSnapshot();
+      if (!remote) throw new Error('Нет ответа от таблицы');
+      const result = mutateFn(remote);
+      if (result === CLOUD_PUSH_SKIP) return { remote, result: null, skipped: true };
+      await pushCloudSnapshot(remote);
+      lastRemote = remote;
+      if (!verifyFn) return { remote, result };
+      await new Promise(r => setTimeout(r, 350));
+      const check = await fetchCloudSnapshot();
+      if (check && verifyFn(check)) return { remote: check, result };
+      lastRemote = check || remote;
+    } catch (e) {
+      lastError = e;
+      console.warn('[cloud] попытка записи ' + attempt + '/' + maxAttempts + ' не удалась:', e && e.message ? e.message : e);
+    }
+    if (attempt < maxAttempts) {
+      const delay = Math.min(2500, 350 * Math.pow(1.7, attempt - 1)) + Math.random() * 250;
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  if (lastRemote && verifyFn) return { remote: lastRemote, result: null, unverified: true };
+  throw lastError || new Error('Не удалось записать данные в общую базу');
+}
+// Временная диагностика: шлёт крошечное тестовое фото на уже подключённый
+// (и заведомо рабочий, раз обычная синхронизация работает) URL Apps Script
+// и показывает точный ответ сервера — без ручного копирования ссылок.
+
+// ---- merge / pinFreshLocalFields ----
+function mergeArrayForCloudPush(remoteArr, localArray) {
+  const remoteList = Array.isArray(remoteArr) ? remoteArr : [];
+  const localIds = new Set(localArray.map(x => x && x.id));
+  // Всё, что есть на сервере, но чего нет (пока) в нашем локальном массиве —
+  // это записи, добавленные/изменённые ДРУГИМИ устройствами уже после того,
+  // как мы в последний раз читали общую базу. Их нельзя терять — просто
+  // оставляем как есть. А для id, которые есть у нас локально, наша версия
+  // считается более свежей (мы её только что изменили) и побеждает.
+  const untouchedRemote = remoteList.filter(r => !localIds.has(r && r.id));
+  return untouchedRemote.concat(localArray);
+}
+
+// ИСПРАВЛЕНО: раньше подтверждение того, что запись реально сохранилась в
+// облаке, проверялось строковым сравнением JSON.stringify(a) === JSON.
+// stringify(b) — это чувствительно к ПОРЯДКУ ПОЛЕЙ в объекте. Если Google
+// Apps Script при сохранении пересобирает объект (например, через
+// Object.assign при слиянии с уже лежащими в таблице данными), порядок
+// ключей у записи может поменяться, хотя содержимое то же самое — из-за
+// этого проверка постоянно считала успешно сохранённые записи
+// "неподтверждёнными". Раньше это было незаметно (ошибка тихо
+// проглатывалась), а после того как сбои синка стали показываться
+// пользователю тостом, этот старый баг сравнения стал выглядеть как
+// настоящая, постоянно повторяющаяся проблема со связью. deepEqualIgnoreKeyOrder
+// сравнивает по значению, а не по порядку ключей.
+
+function deepEqualIgnoreKeyOrder(a, b) {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) { if (!deepEqualIgnoreKeyOrder(a[i], b[i])) return false; }
+    return true;
+  }
+  const aKeys = Object.keys(a).filter(k => a[k] !== undefined);
+  const bKeys = Object.keys(b).filter(k => b[k] !== undefined);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(k => Object.prototype.hasOwnProperty.call(b, k) && deepEqualIgnoreKeyOrder(a[k], b[k]));
+}
+
+
+// ---- Надёжная запись с проверкой и повтором (исправление гонки записи) ----
+// Раньше каждое действие делало fetch → изменить → push ЦЕЛОГО объекта.
+// Если два человека (например, печатник отправляет заявку и в этот же
+// момент у колориста уходит heartbeat presence раз в 30с) успевали сделать
+// это почти одновременно, тот, кто записал вторым, затирал своей — более
+// старой — копией объекта изменения первого. Из-за этого заявка иногда
+// "исчезала", толком не дойдя до колориста. Эта обёртка после записи
+// перечитывает базу и проверяет, что изменение реально сохранилось; если
+// его затёрли — повторяет попытку с СВЕЖИМИ данными ещё раз.
+// ---- Защита от затирания lineRuns/productionOrders чужой синхронизацией ----
+// В приложении десятки мест (сохранение рецепта, заявка на краску, чат,
+// заявка на ремонт, presence-heartbeat и т.д.) читают ВСЮ запись из общей
+// базы, меняют своё поле и отправляют запись обратно целиком. Если такое
+// чтение случайно попадает на долю секунды раньше, чем в базу долетает
+// более свежий «Линия поехала» или импорт плана, эта чужая синхронизация
+// отправляет обратно устаревшую копию lineRuns/productionOrders — и активный
+// забег линии (или только что загрученный план) "пропадает" примерно через
+// 20-40с, когда обычный опрос подтягивает уже испорченные данные. Патчить
+// каждое место по отдельности ненадёжно — правим в одной точке, откуда
+// вообще уходит запись в облако: перед каждой отправкой подставляем самую
+// свежую ЛОКАЛЬНУЮ копию этих двух полей вместо того, что мог вычитать
+// конкретный вызов. Локальные копии обновляются обычным опросом раз в 2с —
+// гораздо чаще, чем работает любая из этих фоновых синхронизаций, — поэтому
+// они заведомо не старее прочитанного и их всегда безопасно подставить.
+function pinFreshLocalFields(remote) {
+  // ИСПРАВЛЕНО: раньше здесь было слепое remote.lineRuns = lineRuns (и то же
+  // для productionOrders) — это польностью ЗАМЕНЯЛО общий список записью
+  // ТЕКУЩЕГО устройства, стирая забеги/заказы, которые другие устройства
+  // уже записали в облако, но это устройство ещё не успело подтянуть себе
+  // (например, экран был заблокирован и 2-секундный опрос притормозился).
+  // Раз эта функция вызывается перед КАЖДОЙ отправкой в облако (даже перед
+  // обычным heartbeat "я на связи" раз в 30с), это могло погасить чужую
+  // "Линия поехала" в любой момент. Теперь вместо слепой замены — то же
+  // слияние по id, что и в осознанной записи гонки/плана: чужие записи,
+  // которых нет в нашей локальной копии, сохраняются как есть.
+  // ИСПРАВЛЕНО: raw remote.lineRuns мог всё ещё содержать запись, которую
+  // cancelLineRun() только что удалил локально (Таблица не успела её
+  // стереть) — а раз её нет в локальном lineRuns, обычный мёрдж по id считал
+  // её "чужой, не трогать" и подставлял обратно в отправку. Из-за этого ЛЮБАЯ
+  // фоновая отправка (heartbeat, заявка на краску и т.п.), случившаяся между
+  // нажатием "отменить" и тем, как облако само догонит удаление, тихо
+  // ВОСКРЕШАЛА только что отменённый забег прямо в общей базе. Убираем из
+  // remote.lineRuns записи, ожидающие подтверждения удаления, прежде чем
+  // мёрджить — см. markLineRunPendingDelete/cancelLineRun.
+  if (typeof lineRuns !== 'undefined' && !lineRunsCloudSyncing) {
+    let remoteForMerge = remote.lineRuns;
+    if (typeof lineRunsPendingDeleteIds !== 'undefined' && lineRunsPendingDeleteIds.size && Array.isArray(remoteForMerge)) {
+      remoteForMerge = remoteForMerge.filter(r => !lineRunsPendingDeleteIds.has(r && r.id));
+    }
+    remote.lineRuns = mergeArrayForCloudPush(remoteForMerge, lineRuns);
+  }
+  if (typeof productionOrders !== 'undefined' && !productionOrdersCloudSyncing) remote.productionOrders = mergeArrayForCloudPush(remote.productionOrders, productionOrders);
+  if (window.aspectCopilotReadPassports) remote.passports = mergeArrayForCloudPush(remote.passports, window.aspectCopilotReadPassports());
+}
+
+// ---- syncArrayToCloud / syncLineRunsToCloud ----
+// Фоновая отправка локального массива целиком в общую базу (последняя запись
+// побеждает — как и остальная синхронизация в этом файле). Используется для
+// заказов / сырья / планового ТО, которые раньше вообще не покидали
+// localStorage конкретного устройства.
+// Поля, где записи — это объекты с уникальным `id`, и где реально бывает,
+// что НЕСКОЛЬКО устройств пишут в один и тот же массив почти одновременно
+// (например 3 печатника одновременно жмут «Линия поехала» на разных линиях).
+// Раньше пуш полностью ЗАТИРАЛ remote[field] локальным массивом — если два
+// человека пушили в течение одного цикла синхронизации, последний пуш
+// стирал забег/заказ, который только что записал кто-то другой (см. разбор
+// бага «статус линий сейчас» — старшие печатники видели «простаивает»,
+// хотя сами только что нажали «Линия поехала»). Для таких полей нужен
+// мёрдж по id, а не слепая перезапись всего массива.
+const CLOUD_ARRAY_MERGE_BY_ID_FIELDS = new Set(['lineRuns', 'shiftReports', 'productionOrders', 'plannedMaintenance', 'rawMaterials', 'defectEvents', 'correctionLog', 'passports']);
+
+// merge → aspect-cloud-sync.js
+// deep → aspect-cloud-sync.js
+let lastSyncFailureToastAt = 0;
+function notifySyncFailure(field) {
+  if (Date.now() - lastSyncFailureToastAt < 60000) return;
+  lastSyncFailureToastAt = Date.now();
+  const label = field === 'lineRuns' ? 'ход линии' : field === 'productionOrders' ? 'план заказов' : field;
+  (typeof toast === 'function' ? toast : function(m){ console.warn(m); })(`Не удалось синхронизировать с облаком (${label}) — проверьте интернет-соединение. Данные сохранены локально, но пока не видны на других устройствах.`, 'error');
+}
+// Для lineRuns не отправляем весь общий снимок: короткий атомарный endpoint
+// под серверным LockService читает свежую историю, сливает её по id и
+// отдельно защищает закрытый забег от старого heartbeat, который может
+// приехать позже. Это также не зависит от размера Data!A1.
+async function syncLineRunsToCloud(runs, deleteIds) {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return false;
+  try {
+    return await postToCloudWithRetry(cfg, {
+      action: 'putLineRuns',
+      runs: Array.isArray(runs) ? runs : [],
+      deleteIds: Array.isArray(deleteIds) ? deleteIds : []
+    }, 3);
+  } catch (e) {
+    console.warn('[cloud] lineRuns atomic sync failed:', e);
+    notifySyncFailure('lineRuns');
+    return false;
+  }
+}
+async function syncArrayToCloud(field, localArray) {
+  const cfg = sheetDbConfig || loadSheetDbConfig();
+  if (!cfg || !cfg.url) return false;
+  const mergeById = CLOUD_ARRAY_MERGE_BY_ID_FIELDS.has(field);
+  try {
+    let mergedSnapshotValue = null;
+    const outcome = await pushCloudSnapshotWithRetry(
+      (remote) => {
+        if (mergeById) {
+          const merged = mergeArrayForCloudPush(remote[field], localArray);
+          remote[field] = merged;
+          mergedSnapshotValue = merged;
+        } else {
+          remote[field] = localArray;
+          mergedSnapshotValue = localArray;
+        }
+        return true;
+      },
+      (remote) => {
+        // Проверяем не побайтовое совпадение всего массива (при мёрдже он
+        // на сервере может отличаться порядком/чужими записями), а что
+        // КАЖДАЯ наша локальная запись реально долетела и сохранилась —
+        // по содержимому, а не по порядку полей в объекте.
+        // ИСПРАВЛЕНО: раньше remote[field] всегда приводился к массиву
+        // (Array.isArray(...) ? ... : []) ДО сравнения. Для полей-объектов
+        // (например resourceCounters — это { "1": {cliche:{...}}, ... }, а
+        // не массив) это давало [] вместо реального объекта, и
+        // deepEqualIgnoreKeyOrder([], объект) гарантированно возвращал
+        // false с самых первых строк (там сразу проверяется Array.isArray
+        // у обоих аргументов) — то есть подтверждение записи ПРИНЦИПИАЛЬНО
+        // не могло пройти, даже если данные реально сохранились на сервере.
+        // Отсюда и постоянный тост "Не удалось синхронизировать с облаком
+        // (resourceCounters)" без реальных проблем с сетью. Приведение к
+        // массиву нужно только для mergeById-ветки (там дальше идёт .some
+        // по элементам массива) — для остальных полей сравниваем
+        // remote[field] как есть, в исходном типе.
+        if (!mergeById) return deepEqualIgnoreKeyOrder(remote[field], mergedSnapshotValue);
+        const arr = Array.isArray(remote[field]) ? remote[field] : [];
+        return localArray.every(la => arr.some(ra => ra && ra.id === la.id && deepEqualIgnoreKeyOrder(ra, la)));
+      }
+    );
+    if (outcome && outcome.unverified) {
+      // ДОБАВЛЕНО: раньше при "не подтвердилось" мы вообще не знали, что
+      // именно не сошлось — запись целиком не долетела до сервера или
+      // долетела, но с другим значением одного из полей (например, Google
+      // Таблица могла превратить число в текст). Печатаем детали в консоль
+      // браузера (F12 → Console), чтобы при следующей похожей жалобе можно
+      // было сразу увидеть причину по скриншоту консоли, а не гадать.
+      try {
+        const lastRemoteArr = Array.isArray(outcome.remote && outcome.remote[field]) ? outcome.remote[field] : [];
+        const missing = [];
+        const mismatched = [];
+        if (mergeById) {
+          localArray.forEach(la => {
+            const ra = lastRemoteArr.find(r => r && r.id === la.id);
+            if (!ra) missing.push(la);
+            else if (!deepEqualIgnoreKeyOrder(ra, la)) mismatched.push({ id: la.id, local: la, remote: ra });
+          });
+        }
+        console.warn('[sync] Не подтвердилась запись в облаке для поля "' + field + '". ' +
+          'missing — наших записей вообще нет в облаке; mismatched — есть, но отличается по значению одного из полей.',
+          { missing, mismatched, localArray, remoteArray: lastRemoteArr });
+      } catch (diagErr) { console.error('[sync] ошибка при подготовке диагностики', diagErr); }
+      notifySyncFailure(field);
+      return false;
+    }
+    return true;
+  } catch (e) { console.error('[sync] сбой запроса к облаку для поля "' + field + '"', e); notifySyncFailure(field); return false; }
+}
+
+</script>
+<script>
+// postToCloudWithRetry → aspect-cloud-sync.js
 // ===== Цифровой двойник ЛИНИИ: журнал партий + прогноз перед запуском =====
 // ---------------------------------------------------------------------------
 // Показываем кнопку подтверждения только начальнику смены (и выше) — та же
@@ -4823,6 +5130,13 @@ async function checkLineTwinBeforeLaunch() {
   }
 }
 
+</script>
+<script>
+/* inlined aspect-vision-cv.js */
+/* aspect-vision-cv.js — on-device CV: MobileNet embedding + cosine similarity
+ * Глобалы: cvModelPromise_, cvModelStatus_, loadCvModel_, setCvModelStatusUI_,
+ * loadScriptOnce_, computeDefectEmbedding_, cosineSimilarity_
+ */
 // ===== On-device Computer Vision: похожесть по фото + корреляции =====
 // ВАЖНО, честно про границы этой фичи: это НЕ обученный классификатор видов
 // брака ("полосы"/"непропечатка"/"конденсат" и т.д.) — для обучения такой
@@ -4850,8 +5164,35 @@ async function checkLineTwinBeforeLaunch() {
 // CDN недоступен в сети цеха (тогда просто не будет подсказки "похоже на...",
 // сама отметка и остальное приложение работают как прежде).
 let cvModelPromise_ = null;
+let cvModelStatus_ = 'idle'; // idle | loading | ready | error
+function setCvModelStatusUI_(status, detail) {
+  cvModelStatus_ = status;
+  const el = document.getElementById('header-cv-status');
+  if (!el) return;
+  if (status === 'loading') {
+    el.textContent = '⏳ CV';
+    el.title = 'Загрузка модели компьютерного зрения…';
+    el.style.color = '#fbbf24';
+  } else if (status === 'ready') {
+    el.textContent = '🟢 CV';
+    el.title = 'Модель готова — подсказка «похоже на фото» доступна';
+    el.style.color = '#34d399';
+  } else if (status === 'error') {
+    el.textContent = '🔴 CV';
+    el.title = 'Модель не загрузилась' + (detail ? ': ' + detail : '') + '. Нажмите, чтобы повторить.';
+    el.style.color = '#f87171';
+    el.style.cursor = 'pointer';
+    el.onclick = () => { cvModelPromise_ = null; loadCvModel_(); };
+  } else {
+    el.textContent = '⚪ CV';
+    el.title = 'Модель ещё не загружалась (подгрузится при первом фото)';
+    el.style.color = '';
+    el.onclick = null;
+  }
+}
 function loadCvModel_() {
   if (cvModelPromise_) return cvModelPromise_;
+  setCvModelStatusUI_('loading');
   cvModelPromise_ = (async () => {
     if (typeof tf === 'undefined') {
       await loadScriptOnce_('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js');
@@ -4862,10 +5203,13 @@ function loadCvModel_() {
     // alpha 0.5 — облегчённая версия сети (меньше точность классификации по
     // 1000 ImageNet-классам, которая нам не нужна, зато заметно быстрее на
     // слабом телефоне в цеху); нам нужен только embedding, не сама классификация.
-    return await mobilenet.load({ version: 2, alpha: 0.5 });
+    const model = await mobilenet.load({ version: 2, alpha: 0.5 });
+    setCvModelStatusUI_('ready');
+    return model;
   })().catch(err => {
     cvModelPromise_ = null; // не запоминаем провал — при следующем фото попробуем снова
     console.warn('[cv] модель компьютерного зрения не загрузилась — подсказка "похоже на фото" будет недоступна, остальное приложение не затронуто', err);
+    setCvModelStatusUI_('error', err && err.message ? err.message : String(err));
     return null;
   });
   return cvModelPromise_;
@@ -4914,6 +5258,9 @@ function cosineSimilarity_(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
+
+</script>
+<script>
 // ===== Быстрые отметки брака/простоя/брак-рулонов — без камеры контроля
 // брака это единственный источник данных о качестве, поэтому важно, чтобы
 // отметка занимала секунды, а не пересчитывалась в уме в конце смены.
@@ -5385,107 +5732,8 @@ async function uploadPhotoAndGetUrl(dataUrl, fileName) {
   console.error('Не удалось загрузить фото в облако:', lastError);
   return null;
 }
-
-// ---- Надёжная запись с проверкой и повтором (исправление гонки записи) ----
-// Раньше каждое действие делало fetch → изменить → push ЦЕЛОГО объекта.
-// Если два человека (например, печатник отправляет заявку и в этот же
-// момент у колориста уходит heartbeat presence раз в 30с) успевали сделать
-// это почти одновременно, тот, кто записал вторым, затирал своей — более
-// старой — копией объекта изменения первого. Из-за этого заявка иногда
-// "исчезала", толком не дойдя до колориста. Эта обёртка после записи
-// перечитывает базу и проверяет, что изменение реально сохранилось; если
-// его затёрли — повторяет попытку с СВЕЖИМИ данными ещё раз.
-// ---- Защита от затирания lineRuns/productionOrders чужой синхронизацией ----
-// В приложении десятки мест (сохранение рецепта, заявка на краску, чат,
-// заявка на ремонт, presence-heartbeat и т.д.) читают ВСЮ запись из общей
-// базы, меняют своё поле и отправляют запись обратно целиком. Если такое
-// чтение случайно попадает на долю секунды раньше, чем в базу долетает
-// более свежий «Линия поехала» или импорт плана, эта чужая синхронизация
-// отправляет обратно устаревшую копию lineRuns/productionOrders — и активный
-// забег линии (или только что загрученный план) "пропадает" примерно через
-// 20-40с, когда обычный опрос подтягивает уже испорченные данные. Патчить
-// каждое место по отдельности ненадёжно — правим в одной точке, откуда
-// вообще уходит запись в облако: перед каждой отправкой подставляем самую
-// свежую ЛОКАЛЬНУЮ копию этих двух полей вместо того, что мог вычитать
-// конкретный вызов. Локальные копии обновляются обычным опросом раз в 2с —
-// гораздо чаще, чем работает любая из этих фоновых синхронизаций, — поэтому
-// они заведомо не старее прочитанного и их всегда безопасно подставить.
-function pinFreshLocalFields(remote) {
-  // ИСПРАВЛЕНО: раньше здесь было слепое remote.lineRuns = lineRuns (и то же
-  // для productionOrders) — это польностью ЗАМЕНЯЛО общий список записью
-  // ТЕКУЩЕГО устройства, стирая забеги/заказы, которые другие устройства
-  // уже записали в облако, но это устройство ещё не успело подтянуть себе
-  // (например, экран был заблокирован и 2-секундный опрос притормозился).
-  // Раз эта функция вызывается перед КАЖДОЙ отправкой в облако (даже перед
-  // обычным heartbeat "я на связи" раз в 30с), это могло погасить чужую
-  // "Линия поехала" в любой момент. Теперь вместо слепой замены — то же
-  // слияние по id, что и в осознанной записи гонки/плана: чужие записи,
-  // которых нет в нашей локальной копии, сохраняются как есть.
-  // ИСПРАВЛЕНО: raw remote.lineRuns мог всё ещё содержать запись, которую
-  // cancelLineRun() только что удалил локально (Таблица не успела её
-  // стереть) — а раз её нет в локальном lineRuns, обычный мёрдж по id считал
-  // её "чужой, не трогать" и подставлял обратно в отправку. Из-за этого ЛЮБАЯ
-  // фоновая отправка (heartbeat, заявка на краску и т.п.), случившаяся между
-  // нажатием "отменить" и тем, как облако само догонит удаление, тихо
-  // ВОСКРЕШАЛА только что отменённый забег прямо в общей базе. Убираем из
-  // remote.lineRuns записи, ожидающие подтверждения удаления, прежде чем
-  // мёрджить — см. markLineRunPendingDelete/cancelLineRun.
-  if (typeof lineRuns !== 'undefined' && !lineRunsCloudSyncing) {
-    let remoteForMerge = remote.lineRuns;
-    if (typeof lineRunsPendingDeleteIds !== 'undefined' && lineRunsPendingDeleteIds.size && Array.isArray(remoteForMerge)) {
-      remoteForMerge = remoteForMerge.filter(r => !lineRunsPendingDeleteIds.has(r && r.id));
-    }
-    remote.lineRuns = mergeArrayForCloudPush(remoteForMerge, lineRuns);
-  }
-  if (typeof productionOrders !== 'undefined' && !productionOrdersCloudSyncing) remote.productionOrders = mergeArrayForCloudPush(remote.productionOrders, productionOrders);
-  if (window.aspectCopilotReadPassports) remote.passports = mergeArrayForCloudPush(remote.passports, window.aspectCopilotReadPassports());
-}
-const CLOUD_PUSH_SKIP = Symbol('cloud-push-skip');
-// Все операции read-modify-write к одной Google Таблице выполняются
-// последовательно. Иначе параллельный heartbeat/ход линии мог прочитать
-// старый снимок и затереть только что добавленную заявку колористу.
-let cloudWriteQueue = Promise.resolve();
-function pushCloudSnapshotWithRetry(mutateFn, verifyFn, maxAttempts) {
-  const run = cloudWriteQueue.then(() => pushCloudSnapshotWithRetryUnlocked(mutateFn, verifyFn, maxAttempts));
-  cloudWriteQueue = run.catch(() => {});
-  return run;
-}
-async function pushCloudSnapshotWithRetryUnlocked(mutateFn, verifyFn, maxAttempts) {
-  // Apps Script может вернуть «Таблица занята другой записью» при
-  // одновременной фоновой синхронизации. Раньше исключение сразу улетало
-  // наружу, поэтому заявка попадала только в локальную очередь. Повторяем
-  // запись с увеличивающейся паузой и только после всех попыток сообщаем сбой.
-  maxAttempts = maxAttempts || 6;
-  let lastRemote = null;
-  let lastError = null;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const remote = await fetchCloudSnapshot();
-      if (!remote) throw new Error('Нет ответа от таблицы');
-      const result = mutateFn(remote);
-      if (result === CLOUD_PUSH_SKIP) return { remote, result: null, skipped: true };
-      await pushCloudSnapshot(remote);
-      lastRemote = remote;
-      if (!verifyFn) return { remote, result };
-      await new Promise(r => setTimeout(r, 350));
-      const check = await fetchCloudSnapshot();
-      if (check && verifyFn(check)) return { remote: check, result };
-      lastRemote = check || remote;
-    } catch (e) {
-      lastError = e;
-      console.warn('[cloud] попытка записи ' + attempt + '/' + maxAttempts + ' не удалась:', e && e.message ? e.message : e);
-    }
-    if (attempt < maxAttempts) {
-      const delay = Math.min(2500, 350 * Math.pow(1.7, attempt - 1)) + Math.random() * 250;
-      await new Promise(r => setTimeout(r, delay));
-    }
-  }
-  if (lastRemote && verifyFn) return { remote: lastRemote, result: null, unverified: true };
-  throw lastError || new Error('Не удалось записать данные в общую базу');
-}
-// Временная диагностика: шлёт крошечное тестовое фото на уже подключённый
-// (и заведомо рабочий, раз обычная синхронизация работает) URL Apps Script
-// и показывает точный ответ сервера — без ручного копирования ссылок.
+// pin → aspect-cloud-sync.js
+// pushCloudSnapshotWithRetry → aspect-cloud-sync.js
 async function testPhotoUploadFromApp() {
   const cfg = sheetDbConfig || loadSheetDbConfig();
   if (!cfg || !cfg.url) { alert('Сначала подключите общую базу (кнопка "Подключить" выше) — тест использует тот же URL.'); return; }
@@ -7494,153 +7742,7 @@ async function checkPaintAlertOnce() {
     }
   } catch (e) { /* тихо игнорируем — повторим на следующем цикле опроса */ }
 }
-// Фоновая отправка локального массива целиком в общую базу (последняя запись
-// побеждает — как и остальная синхронизация в этом файле). Используется для
-// заказов / сырья / планового ТО, которые раньше вообще не покидали
-// localStorage конкретного устройства.
-// Поля, где записи — это объекты с уникальным `id`, и где реально бывает,
-// что НЕСКОЛЬКО устройств пишут в один и тот же массив почти одновременно
-// (например 3 печатника одновременно жмут «Линия поехала» на разных линиях).
-// Раньше пуш полностью ЗАТИРАЛ remote[field] локальным массивом — если два
-// человека пушили в течение одного цикла синхронизации, последний пуш
-// стирал забег/заказ, который только что записал кто-то другой (см. разбор
-// бага «статус линий сейчас» — старшие печатники видели «простаивает»,
-// хотя сами только что нажали «Линия поехала»). Для таких полей нужен
-// мёрдж по id, а не слепая перезапись всего массива.
-const CLOUD_ARRAY_MERGE_BY_ID_FIELDS = new Set(['lineRuns', 'shiftReports', 'productionOrders', 'plannedMaintenance', 'rawMaterials', 'defectEvents', 'correctionLog', 'passports']);
-
-function mergeArrayForCloudPush(remoteArr, localArray) {
-  const remoteList = Array.isArray(remoteArr) ? remoteArr : [];
-  const localIds = new Set(localArray.map(x => x && x.id));
-  // Всё, что есть на сервере, но чего нет (пока) в нашем локальном массиве —
-  // это записи, добавленные/изменённые ДРУГИМИ устройствами уже после того,
-  // как мы в последний раз читали общую базу. Их нельзя терять — просто
-  // оставляем как есть. А для id, которые есть у нас локально, наша версия
-  // считается более свежей (мы её только что изменили) и побеждает.
-  const untouchedRemote = remoteList.filter(r => !localIds.has(r && r.id));
-  return untouchedRemote.concat(localArray);
-}
-
-// ИСПРАВЛЕНО: раньше подтверждение того, что запись реально сохранилась в
-// облаке, проверялось строковым сравнением JSON.stringify(a) === JSON.
-// stringify(b) — это чувствительно к ПОРЯДКУ ПОЛЕЙ в объекте. Если Google
-// Apps Script при сохранении пересобирает объект (например, через
-// Object.assign при слиянии с уже лежащими в таблице данными), порядок
-// ключей у записи может поменяться, хотя содержимое то же самое — из-за
-// этого проверка постоянно считала успешно сохранённые записи
-// "неподтверждёнными". Раньше это было незаметно (ошибка тихо
-// проглатывалась), а после того как сбои синка стали показываться
-// пользователю тостом, этот старый баг сравнения стал выглядеть как
-// настоящая, постоянно повторяющаяся проблема со связью. deepEqualIgnoreKeyOrder
-// сравнивает по значению, а не по порядку ключей.
-function deepEqualIgnoreKeyOrder(a, b) {
-  if (a === b) return true;
-  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) { if (!deepEqualIgnoreKeyOrder(a[i], b[i])) return false; }
-    return true;
-  }
-  const aKeys = Object.keys(a).filter(k => a[k] !== undefined);
-  const bKeys = Object.keys(b).filter(k => b[k] !== undefined);
-  if (aKeys.length !== bKeys.length) return false;
-  return aKeys.every(k => Object.prototype.hasOwnProperty.call(b, k) && deepEqualIgnoreKeyOrder(a[k], b[k]));
-}
-let lastSyncFailureToastAt = 0;
-function notifySyncFailure(field) {
-  if (Date.now() - lastSyncFailureToastAt < 60000) return;
-  lastSyncFailureToastAt = Date.now();
-  const label = field === 'lineRuns' ? 'ход линии' : field === 'productionOrders' ? 'план заказов' : field;
-  toast(`Не удалось синхронизировать с облаком (${label}) — проверьте интернет-соединение. Данные сохранены локально, но пока не видны на других устройствах.`, 'error');
-}
-// Для lineRuns не отправляем весь общий снимок: короткий атомарный endpoint
-// под серверным LockService читает свежую историю, сливает её по id и
-// отдельно защищает закрытый забег от старого heartbeat, который может
-// приехать позже. Это также не зависит от размера Data!A1.
-async function syncLineRunsToCloud(runs, deleteIds) {
-  const cfg = sheetDbConfig || loadSheetDbConfig();
-  if (!cfg || !cfg.url) return false;
-  try {
-    return await postToCloudWithRetry(cfg, {
-      action: 'putLineRuns',
-      runs: Array.isArray(runs) ? runs : [],
-      deleteIds: Array.isArray(deleteIds) ? deleteIds : []
-    }, 3);
-  } catch (e) {
-    console.warn('[cloud] lineRuns atomic sync failed:', e);
-    notifySyncFailure('lineRuns');
-    return false;
-  }
-}
-async function syncArrayToCloud(field, localArray) {
-  const cfg = sheetDbConfig || loadSheetDbConfig();
-  if (!cfg || !cfg.url) return false;
-  const mergeById = CLOUD_ARRAY_MERGE_BY_ID_FIELDS.has(field);
-  try {
-    let mergedSnapshotValue = null;
-    const outcome = await pushCloudSnapshotWithRetry(
-      (remote) => {
-        if (mergeById) {
-          const merged = mergeArrayForCloudPush(remote[field], localArray);
-          remote[field] = merged;
-          mergedSnapshotValue = merged;
-        } else {
-          remote[field] = localArray;
-          mergedSnapshotValue = localArray;
-        }
-        return true;
-      },
-      (remote) => {
-        // Проверяем не побайтовое совпадение всего массива (при мёрдже он
-        // на сервере может отличаться порядком/чужими записями), а что
-        // КАЖДАЯ наша локальная запись реально долетела и сохранилась —
-        // по содержимому, а не по порядку полей в объекте.
-        // ИСПРАВЛЕНО: раньше remote[field] всегда приводился к массиву
-        // (Array.isArray(...) ? ... : []) ДО сравнения. Для полей-объектов
-        // (например resourceCounters — это { "1": {cliche:{...}}, ... }, а
-        // не массив) это давало [] вместо реального объекта, и
-        // deepEqualIgnoreKeyOrder([], объект) гарантированно возвращал
-        // false с самых первых строк (там сразу проверяется Array.isArray
-        // у обоих аргументов) — то есть подтверждение записи ПРИНЦИПИАЛЬНО
-        // не могло пройти, даже если данные реально сохранились на сервере.
-        // Отсюда и постоянный тост "Не удалось синхронизировать с облаком
-        // (resourceCounters)" без реальных проблем с сетью. Приведение к
-        // массиву нужно только для mergeById-ветки (там дальше идёт .some
-        // по элементам массива) — для остальных полей сравниваем
-        // remote[field] как есть, в исходном типе.
-        if (!mergeById) return deepEqualIgnoreKeyOrder(remote[field], mergedSnapshotValue);
-        const arr = Array.isArray(remote[field]) ? remote[field] : [];
-        return localArray.every(la => arr.some(ra => ra && ra.id === la.id && deepEqualIgnoreKeyOrder(ra, la)));
-      }
-    );
-    if (outcome && outcome.unverified) {
-      // ДОБАВЛЕНО: раньше при "не подтвердилось" мы вообще не знали, что
-      // именно не сошлось — запись целиком не долетела до сервера или
-      // долетела, но с другим значением одного из полей (например, Google
-      // Таблица могла превратить число в текст). Печатаем детали в консоль
-      // браузера (F12 → Console), чтобы при следующей похожей жалобе можно
-      // было сразу увидеть причину по скриншоту консоли, а не гадать.
-      try {
-        const lastRemoteArr = Array.isArray(outcome.remote && outcome.remote[field]) ? outcome.remote[field] : [];
-        const missing = [];
-        const mismatched = [];
-        if (mergeById) {
-          localArray.forEach(la => {
-            const ra = lastRemoteArr.find(r => r && r.id === la.id);
-            if (!ra) missing.push(la);
-            else if (!deepEqualIgnoreKeyOrder(ra, la)) mismatched.push({ id: la.id, local: la, remote: ra });
-          });
-        }
-        console.warn('[sync] Не подтвердилась запись в облаке для поля "' + field + '". ' +
-          'missing — наших записей вообще нет в облаке; mismatched — есть, но отличается по значению одного из полей.',
-          { missing, mismatched, localArray, remoteArray: lastRemoteArr });
-      } catch (diagErr) { console.error('[sync] ошибка при подготовке диагностики', diagErr); }
-      notifySyncFailure(field);
-      return false;
-    }
-    return true;
-  } catch (e) { console.error('[sync] сбой запроса к облаку для поля "' + field + '"', e); notifySyncFailure(field); return false; }
-}
+// syncArrayToCloud + syncLineRunsToCloud → aspect-cloud-sync.js
 // Уведомление (звук + системный Notification, если разрешён) колористу/
 // начальнику смены о КАЖДОЙ новой заявке "нужна краска", как только она
 // впервые появилась в общей базе — а не только когда она уже "простаивает"
@@ -8134,7 +8236,15 @@ async function fulfillPaintRequest(id) {
   const req = paintRequests.find(r => r.id === id);
   if (!req) return;
   const updated = await updatePaintRequestStatus(id, 'done');
-  if (updated) announcePaintPoured(updated.line);
+  if (updated) {
+    announcePaintPoured(updated.line);
+    // Автособытие в паспорт партии (если открыт / есть по артикулу+линии)
+    if (typeof window.aspectCopilotAutoEvent === 'function') {
+      try {
+        window.aspectCopilotAutoEvent('Краска налита', 'Линия ' + (updated.line || '?') + (updated.article ? ' · арт. ' + updated.article : '') + ' · заявка закрыта «Налил»');
+      } catch (e) {}
+    }
+  }
 }
 function cancelPaintRequest(id) {
   if (paintRequestActionsInFlight.has(id)) return;
@@ -12941,8 +13051,20 @@ async function seedInitialRecipesIfEmpty() {
 }
 
 function initDB() {
-  const req = indexedDB.open('colorist_ultimate_db', 8);
-  req.onsuccess = () => { db = req.result; seedInitialRecipesIfEmpty().then(() => { loadRecipes(); loadPrecedentCases(); loadCorrectionAttempts(); renderProductionBatches(); renderMaterialAlerts(); renderShiftPanel(); if (typeof refreshColoristDigitalTwins === 'function') refreshColoristDigitalTwins(); }); };
+  const req = indexedDB.open('colorist_ultimate_db', 9);
+  req.onsuccess = () => {
+    db = req.result;
+    seedInitialRecipesIfEmpty().then(() => {
+      loadRecipes();
+      loadPrecedentCases();
+      loadCorrectionAttempts();
+      renderProductionBatches();
+      renderMaterialAlerts();
+      renderShiftPanel();
+      if (typeof refreshColoristDigitalTwins === 'function') refreshColoristDigitalTwins();
+      if (typeof migratePassportsToIDB === 'function') migratePassportsToIDB();
+    });
+  };
   req.onupgradeneeded = ev => {
     const target = ev.target.result;
     if (!target.objectStoreNames.contains(STORE_NAME)) target.createObjectStore(STORE_NAME, {keyPath: 'id'});
@@ -12951,7 +13073,48 @@ function initDB() {
     if (!target.objectStoreNames.contains(VISION_STORE)) target.createObjectStore(VISION_STORE, {keyPath: 'id'});
     if (!target.objectStoreNames.contains(SHIFT_STORE)) target.createObjectStore(SHIFT_STORE, {keyPath: 'id'});
     if (!target.objectStoreNames.contains(LEARNING_STORE)) target.createObjectStore(LEARNING_STORE, {keyPath: 'id'});
+    if (!target.objectStoreNames.contains(PASSPORT_STORE)) target.createObjectStore(PASSPORT_STORE, {keyPath: 'id'});
   };
+}
+
+// Миграция паспортов партий из localStorage → IndexedDB (v9).
+// LS остаётся быстрым кэшем для синхронного UI Copilot; IDB — основной склад.
+async function migratePassportsToIDB() {
+  try {
+    if (!db || !db.objectStoreNames.contains(PASSPORT_STORE)) return;
+    const KEY = 'aspect_batch_passports_v1';
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { list = []; }
+    if (!Array.isArray(list) || !list.length) return;
+    const existing = await new Promise(resolve => {
+      const tx = db.transaction(PASSPORT_STORE, 'readonly');
+      tx.objectStore(PASSPORT_STORE).getAll().onsuccess = e => resolve(e.target.result || []);
+    });
+    if (existing.length >= list.length) return;
+    const tx = db.transaction(PASSPORT_STORE, 'readwrite');
+    const store = tx.objectStore(PASSPORT_STORE);
+    list.forEach(item => { if (item && item.id != null) store.put(item); });
+  } catch (e) { console.warn('[passports] миграция в IDB не удалась', e); }
+}
+
+function idbWritePassports(list) {
+  if (!db || !db.objectStoreNames.contains(PASSPORT_STORE)) return;
+  try {
+    const tx = db.transaction(PASSPORT_STORE, 'readwrite');
+    const store = tx.objectStore(PASSPORT_STORE);
+    store.clear();
+    (Array.isArray(list) ? list : []).forEach(item => { if (item && item.id != null) store.put(item); });
+  } catch (e) { console.warn('[passports] запись в IDB не удалась', e); }
+}
+
+function idbReadPassports() {
+  return new Promise(resolve => {
+    if (!db || !db.objectStoreNames.contains(PASSPORT_STORE)) return resolve([]);
+    try {
+      const tx = db.transaction(PASSPORT_STORE, 'readonly');
+      tx.objectStore(PASSPORT_STORE).getAll().onsuccess = e => resolve(e.target.result || []);
+    } catch (e) { resolve([]); }
+  });
 }
 
 // Показывает, откалиброван ли баланс белого для каждого источника фото.
@@ -23303,6 +23466,11 @@ async function createProductionBatch() {
   toast(`Бирка ${batch.code} создана`);
   logCorrection(`Создали производственную бирку ${batch.code} (арт. ${article})`, 'save');
 
+  // Связка с электронным паспортом партии (Copilot)
+  if (typeof window.aspectCopilotEnsureFromBatch === 'function') {
+    try { window.aspectCopilotEnsureFromBatch(batch); } catch (e) {}
+  }
+
   const resultEl = document.getElementById('new-batch-result');
   resultEl.classList.remove('hidden');
   resultEl.innerHTML = renderBatchQRBlock(batch);
@@ -25768,7 +25936,1133 @@ function printTraineeCertificate() {
       <div class="date">Сформировано ${new Date().toLocaleDateString('ru-RU')}</div>
     </div>
     <script>window.onload = () => window.print();<\/script>
-  </body></html>`);
+  <style>
+/* inlined aspect-copilot.css */
+  /* Aspect Copilot — локальный слой аналитики поверх существующего PWA */
+  #aspect-copilot-fab {
+    position: fixed; right: 16px; bottom: calc(74px + env(safe-area-inset-bottom));
+    z-index: 58; border: 1px solid rgba(255,255,255,.45); color: #fff;
+    padding: 11px 15px; border-radius: 999px; font: 900 10px/1 Inter,system-ui,sans-serif;
+    letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+    background: linear-gradient(135deg,#7c3aed,#2563eb 58%,#0891b2);
+    box-shadow: 0 12px 30px rgba(37,99,235,.35), 0 2px 8px rgba(15,23,42,.22);
+    transition: transform .18s ease, filter .18s ease;
+  }
+  #aspect-copilot-fab:hover { transform: translateY(-2px); filter: saturate(1.15) brightness(1.05); }
+  #aspect-copilot-fab:active { transform: scale(.96); }
+  #aspect-copilot-modal { position: fixed; inset: 0; z-index: 59; display: flex; align-items: flex-end;
+    justify-content: center; padding: 12px; background: rgba(2,6,23,.62); backdrop-filter: blur(8px); }
+  #aspect-copilot-modal.hidden { display: none; }
+  .aspect-copilot-sheet { width: min(760px,100%); max-height: min(88vh,820px); overflow: auto;
+    color: #172033; background: #f8fbff; border: 1px solid rgba(255,255,255,.8);
+    border-radius: 28px; box-shadow: 0 28px 90px rgba(2,6,23,.38); animation: aspectCopilotIn .22s ease-out; }
+  @keyframes aspectCopilotIn { from { opacity: 0; transform: translateY(24px) scale(.98) } to { opacity: 1; transform: none } }
+  .aspect-copilot-head { padding: 18px 18px 14px; color: #fff; background:
+    radial-gradient(circle at 88% 0%,rgba(34,211,238,.45),transparent 34%),
+    linear-gradient(135deg,#172554,#3730a3 55%,#0e7490); border-radius: 28px 28px 0 0; }
+  .aspect-copilot-tabs { display: flex; gap: 6px; padding: 10px 14px 0; overflow-x: auto; }
+  .aspect-copilot-tab { flex: 0 0 auto; border: 0; border-radius: 12px; padding: 8px 10px; color: #64748b;
+    background: #e9f0fa; font: 900 9px/1 system-ui,sans-serif; text-transform: uppercase; cursor: pointer; }
+  .aspect-copilot-tab.active { color: #fff; background: #3730a3; }
+  .aspect-copilot-body { padding: 14px; }
+  .aspect-copilot-grid { display:grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; }
+  .aspect-copilot-stat { padding: 11px 10px; border: 1px solid #e4ebf5; border-radius: 16px; background: #fff; }
+  .aspect-copilot-stat small { display:block; color:#94a3b8; font: 900 8px/1.2 system-ui,sans-serif; text-transform:uppercase; }
+  .aspect-copilot-stat strong { display:block; margin-top:5px; color:#172033; font: 900 16px/1.1 system-ui,sans-serif; }
+  .aspect-copilot-card { margin-top: 10px; padding: 13px; border-radius: 18px; border: 1px solid #e4ebf5; background:#fff; }
+  .aspect-copilot-card h4 { margin:0 0 8px; font: 900 10px/1.2 system-ui,sans-serif; text-transform:uppercase; letter-spacing:.05em; }
+  .aspect-copilot-card p,.aspect-copilot-card li { color:#475569; font: 700 11px/1.5 system-ui,sans-serif; }
+  .aspect-copilot-card ul { margin: 7px 0 0; padding-left: 18px; }
+  .aspect-copilot-card li + li { margin-top: 4px; }
+  .aspect-copilot-meter { height: 10px; margin: 9px 0 5px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
+  .aspect-copilot-meter > i { display:block; height:100%; border-radius:inherit; background: linear-gradient(90deg,#10b981,#f59e0b 62%,#ef4444); transition: width .3s ease; }
+  .aspect-copilot-chip { display:inline-flex; align-items:center; gap:5px; padding:5px 8px; margin:2px;
+    border-radius:999px; color:#334155; background:#eef4fb; font:800 9px/1 system-ui,sans-serif; }
+  .aspect-copilot-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
+  .aspect-copilot-actions button { border:0; border-radius:12px; padding:10px 12px; cursor:pointer; color:#fff;
+    background:#1e3a8a; font:900 9px/1 system-ui,sans-serif; text-transform:uppercase; }
+  .aspect-copilot-actions button.secondary { color:#1e3a8a; background:#e0e7ff; }
+  .aspect-copilot-actions button.ghost { color:#64748b; background:#eef2f7; }
+  .aspect-copilot-input { width:100%; box-sizing:border-box; resize:vertical; min-height:66px; padding:11px;
+    border:1px solid #dbe5f1; border-radius:14px; outline:0; color:#172033; background:#f8fafc;
+    font:700 11px/1.45 system-ui,sans-serif; }
+  .aspect-copilot-empty { padding:24px 10px; color:#64748b; text-align:center; font:700 11px/1.5 system-ui,sans-serif; }
+  @media (max-width: 520px) {
+    #aspect-copilot-fab { right: 11px; bottom: calc(78px + env(safe-area-inset-bottom)); }
+    .aspect-copilot-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+    .aspect-copilot-sheet { max-height: 91vh; border-radius: 24px; }
+    .aspect-copilot-head { border-radius:24px 24px 0 0; }
+  }
+  body.dark-theme .aspect-copilot-sheet { color:#e2e8f0; background:#0f172a; border-color:#1e293b; }
+  body.dark-theme .aspect-copilot-stat,
+  body.dark-theme .aspect-copilot-card { background:#111827; border-color:#1e293b; }
+  body.dark-theme .aspect-copilot-stat small { color:#94a3b8; }
+  body.dark-theme .aspect-copilot-stat strong { color:#f1f5f9; }
+  body.dark-theme .aspect-copilot-card h4 { color:#e2e8f0; }
+  body.dark-theme .aspect-copilot-card p,
+  body.dark-theme .aspect-copilot-card li { color:#cbd5e1; }
+  body.dark-theme .aspect-copilot-tab { background:#1e293b; color:#94a3b8; }
+  body.dark-theme .aspect-copilot-tab.active { background:#4338ca; color:#fff; }
+  body.dark-theme .aspect-copilot-input { background:#0b1220; border-color:#334155; color:#e2e8f0; }
+  body.dark-theme .aspect-copilot-chip { background:#1e293b; color:#cbd5e1; }
+  body.dark-theme .aspect-copilot-meter { background:#1e293b; }
+  body.dark-theme .aspect-copilot-actions button.secondary { background:#312e81; color:#e0e7ff; }
+  body.dark-theme .aspect-copilot-actions button.ghost { background:#1e293b; color:#94a3b8; }
+  body.dark-theme .aspect-copilot-empty { color:#94a3b8; }
+
+</style>
+<script>
+/* inlined aspect-copilot.js */
+/* ==========================================================================
+   ASPECT COPILOT v1
+   Работает локально и не делает вид, что эвристики — обученная модель.
+   Слой собирает уже имеющиеся в приложении данные и выдаёт объяснимую
+   оценку риска. Его можно безболезненно заменить серверным AI-gateway.
+   ========================================================================== */
+(function initAspectCopilot() {
+  'use strict';
+  if (document.getElementById('aspect-copilot-fab')) return;
+
+  const esc = (value) => String(value == null ? '' : value)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  const byId = (id) => document.getElementById(id);
+  const text = (id) => (byId(id) && (byId(id).value || byId(id).textContent || '').trim()) || '';
+  const n = (value) => {
+    const match = String(value == null ? '' : value).replace(',','.').match(/-?\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : null;
+  };
+  const safeJson = (key, fallback) => {
+    try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch (e) { return fallback; }
+  };
+  const formatNum = (value, digits = 1) => value == null || !isFinite(value) ? '—' : Number(value).toFixed(digits).replace('.',',');
+
+  const state = {
+    tab: 'overview',
+    scan: null,
+    report: null,
+    recipes: null,
+    batches: null,
+    defects: null,
+    passportId: null
+  };
+
+  const PASSPORTS_KEY = 'aspect_batch_passports_v1';
+  let passportCloudSyncTimer = null;
+  let passportCloudSyncRunning = false;
+  let passportCloudSyncAgain = false;
+
+  function passportUpdatedAt(item) {
+    const value = item && (item.updatedAt || item.createdAt);
+    const parsed = value ? Date.parse(value) : 0;
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  // Сливаем паспорта по времени изменения. Лента событий объединяется
+  // отдельно, поэтому события с двух устройств не пропадают.
+  function mergePassportLists(remoteList, localList) {
+    const byId = new Map();
+    const order = [];
+    const add = item => {
+      if (!item || item.id == null) return;
+      const id = String(item.id);
+      if (!byId.has(id)) {
+        byId.set(id, item);
+        order.push(id);
+        return;
+      }
+      const previous = byId.get(id);
+      const winner = passportUpdatedAt(item) >= passportUpdatedAt(previous) ? item : previous;
+      const events = [];
+      const seen = new Set();
+      [...(previous.events || []), ...(item.events || [])].forEach(event => {
+        if (!event) return;
+        const key = [event.at, event.kind, event.note, event.actor, event.outcome].join('|');
+        if (!seen.has(key)) { seen.add(key); events.push(event); }
+      });
+      events.sort((a, b) => (Date.parse(a.at || '') || 0) - (Date.parse(b.at || '') || 0));
+      byId.set(id, Object.assign({}, winner, { events }));
+    };
+    (Array.isArray(remoteList) ? remoteList : []).forEach(add);
+    (Array.isArray(localList) ? localList : []).forEach(add);
+    return order.map(id => byId.get(id)).slice(-100);
+  }
+
+  function queuePassportCloudSync() {
+    const cfg = sheetDbConfig || loadSheetDbConfig();
+    if (!cfg || !cfg.url) return;
+    if (passportCloudSyncRunning) {
+      passportCloudSyncAgain = true;
+      return;
+    }
+    if (passportCloudSyncTimer) clearTimeout(passportCloudSyncTimer);
+    passportCloudSyncTimer = setTimeout(async () => {
+      passportCloudSyncTimer = null;
+      passportCloudSyncRunning = true;
+      try {
+        await syncArrayToCloud('passports', readPassports());
+      } finally {
+        passportCloudSyncRunning = false;
+        if (passportCloudSyncAgain) {
+          passportCloudSyncAgain = false;
+          queuePassportCloudSync();
+        }
+      }
+    }, 250);
+  }
+
+  function readDeltaE() {
+    const candidates = ['compare-de-value','compare-de-badge','de-warning-banner','ai-analysis','correction-advice'];
+    const values = candidates.map(id => n(text(id))).filter(v => v != null && v >= 0 && v <= 100);
+    if (values.length) return values[0];
+    const bodyMatch = (document.body.innerText || '').match(/(?:ΔE|dE)\s*[:=]?\s*(\d+(?:[,.]\d+)?)/i);
+    return bodyMatch ? n(bodyMatch[1]) : null;
+  }
+
+  function collectScan() {
+    const dE = readDeltaE();
+    const theo = text('theo-hex');
+    const actual = text('actual-hex');
+    const article = text('article');
+    const line = text('colorist-line');
+    const base = text('base');
+    const baseLot = text('base-lot');
+    const comment = text('recipe-comment');
+    const correctionHistory = safeJson('colorist_correction_history', []);
+    const scans = safeJson('colorist_scan_history', []);
+    const pendingRequests = safeJson('paint_requests_pending_send', []);
+    const visionRoll = n(localStorage.getItem('visionRollMeter'));
+    const hasColorPair = Boolean(theo && actual && theo !== '--' && actual !== '--');
+    let risk = 12;
+    const reasons = [];
+    const actions = [];
+    if (dE == null) { risk += 22; reasons.push('нет свежего подтверждённого ΔE'); actions.push('Снимите эталон и замес при одном источнике света'); }
+    else if (dE > 3.5) { risk += 34; reasons.push('ΔE выше критического порога'); actions.push('Не сдавайте партию — сделайте одну контролируемую коррекцию'); }
+    else if (dE > 1.5) { risk += 20; reasons.push('ΔE выше рабочего допуска'); actions.push('Сверьте ось отклонения ΔL/ΔA/ΔB перед добавлением пигмента'); }
+    else if (dE > 1) { risk += 9; reasons.push('цвет близок к допуску, но требует подтверждения'); actions.push('Повторите замер после высыхания'); }
+    if (!hasColorPair) { risk += 13; reasons.push('не собрана пара фото эталон/замес'); actions.push('Загрузите оба образца — так прогноз будет надёжнее'); }
+    if (!article) { risk += 8; reasons.push('не указан артикул'); actions.push('Укажите артикул, чтобы связать результат с историей'); }
+    if (!line) { risk += 7; reasons.push('не выбрана линия'); actions.push('Выберите линию перед запуском'); }
+    if (!baseLot) { risk += 6; reasons.push('не указан лот основы'); actions.push('Запишите лот основы для контроля стабильности'); }
+    if (correctionHistory.length > 2) { risk += 8; reasons.push('в текущей истории много коррекций'); actions.push('Остановите серию попыток и сравните с лучшим прецедентом'); }
+    if (pendingRequests.length) { risk += 4; reasons.push('есть недоставленные заявки по краске'); actions.push('Проверьте очередь заявок перед стартом'); }
+    if (visionRoll != null && visionRoll > 0) reasons.push('контроль рулона уже идёт с отметки ' + formatNum(visionRoll,0) + ' м');
+    risk = Math.max(0, Math.min(100, Math.round(risk)));
+    const status = risk >= 65 ? { label:'ВЫСОКИЙ', color:'#dc2626' } : risk >= 35 ? { label:'СРЕДНИЙ', color:'#d97706' } : { label:'НИЗКИЙ', color:'#059669' };
+    return {
+      dE, article, line, base, baseLot, comment, theo, actual, hasColorPair,
+      correctionCount: correctionHistory.length, scanCount: scans.length,
+      pendingCount: pendingRequests.length, visionRoll, risk, status, reasons, actions,
+      stamp: new Date().toISOString()
+    };
+  }
+
+  async function enrichScan(scan) {
+    if (typeof getAllLocalRecipes === 'function') {
+      try { state.recipes = await getAllLocalRecipes(); } catch (e) { state.recipes = null; }
+    }
+    if (typeof getAllProductionBatches === 'function') {
+      try { state.batches = await getAllProductionBatches(); } catch (e) { state.batches = null; }
+    }
+    if (typeof getAllVisionDefects === 'function') {
+      try { state.defects = await getAllVisionDefects(); } catch (e) { state.defects = null; }
+    }
+    state.scan = scan;
+    renderCopilot();
+  }
+
+  function scoreDescription(scan) {
+    return scan.risk >= 65 ? 'Перед запуском нужен контроль мастера' :
+      scan.risk >= 35 ? 'Можно продолжать после короткой проверки' : 'Состояние выглядит стабильным';
+  }
+
+  function stat(label, value) {
+    return '<div class="aspect-copilot-stat"><small>' + esc(label) + '</small><strong>' + esc(value) + '</strong></div>';
+  }
+
+  function overviewHtml(scan) {
+    const recipes = state.recipes ? state.recipes.length : '—';
+    const batches = state.batches ? state.batches.length : '—';
+    const defects = state.defects ? state.defects.length : '—';
+    return '<div class="aspect-copilot-grid">' +
+      stat('Риск запуска', scan.risk + '/100') + stat('ΔE сейчас', formatNum(scan.dE,2)) +
+      stat('Рецептов в памяти', recipes) + stat('Дефектов CV', defects) + '</div>' +
+      '<div class="aspect-copilot-card">' +
+        '<h4>🤖 Вердикт Copilot · ' + esc(scoreDescription(scan)) + '</h4>' +
+        '<div class="aspect-copilot-meter"><i style="width:' + scan.risk + '%"></i></div>' +
+        '<p><b style="color:' + scan.status.color + '">' + esc(scan.status.label) + '</b> · оценка объяснимая и локальная, без отправки фото или рецепта в облако.</p>' +
+        '<div>' +
+          '<span class="aspect-copilot-chip">Артикул: ' + esc(scan.article || 'не указан') + '</span>' +
+          '<span class="aspect-copilot-chip">Линия: ' + esc(scan.line || 'не выбрана') + '</span>' +
+          '<span class="aspect-copilot-chip">Основа: ' + esc(scan.base || '—') + '</span>' +
+          (scan.baseLot ? '<span class="aspect-copilot-chip">Лот: ' + esc(scan.baseLot) + '</span>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="aspect-copilot-card"><h4>Почему такой риск</h4><ul>' +
+        (scan.reasons.length ? scan.reasons.map(item => '<li>• ' + esc(item) + '</li>').join('') : '<li>• Критичных сигналов не найдено</li>') +
+      '</ul></div>' +
+      '<div class="aspect-copilot-card"><h4>Что сделать сейчас</h4><ul>' +
+        (scan.actions.length ? scan.actions.slice(0,4).map(item => '<li>→ ' + esc(item) + '</li>').join('') : '<li>→ Можно переходить к сдаче партии по чек-листу</li>') +
+      '</ul></div>' +
+      '<div class="aspect-copilot-actions">' +
+        '<button onclick="aspectCopilotSetTab(\'risk\')">Проверить риск</button>' +
+        '<button class="secondary" onclick="aspectCopilotSetTab(\'knowledge\')">Карта знаний</button>' +
+        '<button class="secondary" onclick="aspectCopilotSetTab(\'handover\')">Передача смены</button>' +
+        '<button class="ghost" onclick="aspectCopilotSaveReport()">Сохранить снимок</button>' +
+      '</div>';
+  }
+
+  function riskHtml(scan) {
+    const matrix = [
+      ['Цветовой допуск', scan.dE == null ? 'Нет замера' : 'ΔE ' + formatNum(scan.dE,2), scan.dE == null ? 'critical' : scan.dE > 3.5 ? 'critical' : scan.dE > 1.5 ? 'warn' : 'ok'],
+      ['Идентификация', scan.article && scan.line ? 'Артикул и линия указаны' : 'Нужно заполнить артикул/линию', scan.article && scan.line ? 'ok' : 'warn'],
+      ['Трассируемость', scan.baseLot ? 'Лот основы записан' : 'Лот основы не записан', scan.baseLot ? 'ok' : 'warn'],
+      ['Контроль изображения', scan.hasColorPair ? 'Эталон и замес доступны' : 'Нужны оба образца', scan.hasColorPair ? 'ok' : 'warn'],
+      ['Повторные попытки', scan.correctionCount > 2 ? scan.correctionCount + ' записей коррекции' : 'в норме', scan.correctionCount > 2 ? 'warn' : 'ok']
+    ];
+    const icon = type => type === 'ok' ? '🟢' : type === 'warn' ? '🟡' : '🔴';
+    return '<div class="aspect-copilot-card"><h4>🔮 Предстартовый контроль</h4>' +
+      '<p>Система проверяет не только цвет, но и готовность данных для расследования, если партия уйдёт в брак.</p>' +
+      '<div style="display:grid;gap:7px">' + matrix.map(row => '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid #edf2f7;font:800 10px/1.3 system-ui,sans-serif"><span>' + icon(row[2]) + ' ' + esc(row[0]) + '</span><span style="color:#64748b;text-align:right">' + esc(row[1]) + '</span></div>').join('') + '</div>' +
+      '</div>' +
+      '<div class="aspect-copilot-card"><h4>Рекомендуемая последовательность</h4><ol style="margin:0;padding-left:19px">' +
+      scan.actions.slice(0,5).map(item => '<li style="margin:6px 0;color:#475569;font:700 11px/1.45 system-ui,sans-serif">' + esc(item) + '</li>').join('') +
+      '</ol></div>' +
+      '<div class="aspect-copilot-actions"><button onclick="aspectCopilotGo(\'vision\')">Открыть контроль брака</button><button class="secondary" onclick="aspectCopilotGo(\'production\')">Открыть производство</button></div>';
+  }
+
+  function correctionHtml(scan) {
+    const axis = scan.dE == null ? 'нет данных по ΔE' : scan.dE > 3.5 ? 'сначала повторный замер и проверка образцов' : scan.dE > 1.5 ? 'проверить ΔL / ΔA / ΔB и сделать одну малую коррекцию' : 'не менять рецепт без повторной проверки после высыхания';
+    const history = safeJson('colorist_correction_history', []);
+    return '<div class="aspect-copilot-card"><h4>🧪 Безопасная коррекция</h4><p>Рекомендация: <b>' + esc(axis) + '</b>. Copilot не меняет навеску автоматически — каждое изменение должно быть видно и подтверждено колористом.</p>' +
+      '<textarea id="aspect-copilot-correction-note" class="aspect-copilot-input" placeholder="Например: уменьшить жёлтый на 0,3 г, добавить 0,7 г циана после проверки оси ΔB"></textarea>' +
+      '<div class="aspect-copilot-actions"><button onclick="aspectCopilotSaveCorrection()">Сохранить рекомендацию</button><button class="secondary" onclick="aspectCopilotGo(\'colorist\')">Вернуться в рецепт</button></div></div>' +
+      '<div class="aspect-copilot-card"><h4>Последние коррекции · ' + history.length + '</h4>' +
+      (history.length ? '<ul>' + history.slice(-4).reverse().map(item => '<li>• ' + esc(typeof item === 'string' ? item : (item.text || item.reason || JSON.stringify(item))) + '</li>').join('') + '</ul>' : '<p>История коррекций пока пуста.</p>') + '</div>';
+  }
+
+  function handoverHtml(scan) {
+    const report = [
+      'ПЕРЕДАЧА СМЕНЫ · ' + new Date().toLocaleString('ru-RU'),
+      'Артикул: ' + (scan.article || 'не указан') + ' · Линия: ' + (scan.line || 'не выбрана'),
+      'Основа: ' + (scan.base || '—') + (scan.baseLot ? ' · лот ' + scan.baseLot : ''),
+      'ΔE: ' + formatNum(scan.dE,2) + ' · риск запуска: ' + scan.risk + '/100 (' + scan.status.label + ')',
+      '',
+      'ОБЯЗАТЕЛЬНО ПРОВЕРИТЬ:',
+      ...(scan.actions.length ? scan.actions.map((item, i) => (i + 1) + '. ' + item) : ['1. Критичных незавершённых действий не найдено']),
+      '',
+      'Контекст: ' + (scan.comment || 'комментарий к рецепту не добавлен')
+    ].join('\\n');
+    state.report = report;
+    return '<div class="aspect-copilot-card"><h4>📤 Готовая передача смены</h4><textarea id="aspect-copilot-handover" class="aspect-copilot-input" style="min-height:220px">' + esc(report) + '</textarea>' +
+      '<div class="aspect-copilot-actions"><button onclick="aspectCopilotCopyHandover()">Скопировать</button><button class="secondary" onclick="aspectCopilotSaveHandover()">Сохранить в журнал</button><button class="ghost" onclick="aspectCopilotGo(\'dashboard\')">Открыть панель</button></div></div>' +
+      '<div class="aspect-copilot-card"><h4>Данные для контекста</h4>' +
+        '<span class="aspect-copilot-chip">Рецептов: ' + esc(state.recipes ? state.recipes.length : '—') + '</span>' +
+        '<span class="aspect-copilot-chip">Партий: ' + esc(state.batches ? state.batches.length : '—') + '</span>' +
+        '<span class="aspect-copilot-chip">Дефектов CV: ' + esc(state.defects ? state.defects.length : '—') + '</span>' +
+        '<span class="aspect-copilot-chip">Недоставленных заявок: ' + esc(scan.pendingCount) + '</span></div>';
+  }
+
+  const PASSPORT_SCHEMA_VERSION = 1;
+
+  function normalizePassport(item) {
+    if (!item || typeof item !== 'object') return null;
+    const out = Object.assign({}, item);
+    if (out.schemaVersion == null) out.schemaVersion = PASSPORT_SCHEMA_VERSION;
+    // v1: гарантируем обязательные поля
+    if (!Array.isArray(out.events)) out.events = [];
+    if (!out.fields || typeof out.fields !== 'object') out.fields = {};
+    if (!out.stage) out.stage = 'work';
+    if (!out.status) out.status = 'НА ПРОВЕРКЕ';
+    if (!out.createdAt) out.createdAt = out.updatedAt || new Date().toISOString();
+    if (!out.updatedAt) out.updatedAt = out.createdAt;
+    return out;
+  }
+
+  function readPassports() {
+    const list = safeJson(PASSPORTS_KEY, []);
+    if (!Array.isArray(list)) return [];
+    // Миграция на лету при чтении (schemaVersion)
+    let changed = false;
+    const migrated = list.map(item => {
+      if (!item || item.schemaVersion === 1) return item;
+      changed = true;
+      return normalizePassport(item);
+    }).filter(Boolean);
+    if (changed) {
+      try { localStorage.setItem(PASSPORTS_KEY, JSON.stringify(migrated)); } catch (e) {}
+      if (typeof idbWritePassports === 'function') idbWritePassports(migrated);
+    }
+    return migrated;
+  }
+
+  function writePassports(list, options) {
+    const safeList = (Array.isArray(list) ? list : [])
+      .map(normalizePassport)
+      .filter(Boolean)
+      .slice(-100);
+    try { localStorage.setItem(PASSPORTS_KEY, JSON.stringify(safeList)); } catch (e) {}
+    // Дублируем в IndexedDB — основной склад (LS остаётся быстрым синхронным кэшем).
+    if (typeof idbWritePassports === 'function') idbWritePassports(safeList);
+    if (!options || !options.skipCloud) queuePassportCloudSync();
+  }
+
+  function passportSnapshot(scan) {
+    return {
+      article: scan.article || '',
+      line: scan.line || '',
+      base: scan.base || '',
+      baseLot: scan.baseLot || '',
+      dE: scan.dE,
+      theo: scan.theo || '',
+      actual: scan.actual || '',
+      hasColorPair: Boolean(scan.hasColorPair),
+      risk: scan.risk,
+      riskLabel: scan.status && scan.status.label ? scan.status.label : '',
+      comment: scan.comment || ''
+    };
+  }
+
+  function passportAutoStatus(scan) {
+    if (scan.dE != null && scan.dE > 1.5) return { label:'НУЖНА КОРРЕКЦИЯ', color:'#dc2626' };
+    if (scan.risk >= 65) return { label:'НУЖНА КОРРЕКЦИЯ', color:'#dc2626' };
+    if (scan.dE != null && scan.dE <= 1.5 && scan.article && scan.line && scan.baseLot && scan.hasColorPair) {
+      return { label:'ГОТОВА', color:'#059669' };
+    }
+    return { label:'НА ПРОВЕРКЕ', color:'#d97706' };
+  }
+
+  function passportStatusColor(status) {
+    return status === 'ГОТОВА' ? '#059669' : status === 'НУЖНА КОРРЕКЦИЯ' ? '#dc2626' : '#d97706';
+  }
+
+  function passportActor() {
+    try {
+      if (typeof currentUserProfile !== 'undefined' && currentUserProfile && currentUserProfile.name) return currentUserProfile.name;
+    } catch (e) {}
+    return localStorage.getItem('aspect_passport_actor') || '';
+  }
+
+  function passportStageMeta(stage) {
+    if (stage === 'review') return { label:'НА ПРОВЕРКЕ', color:'#2563eb' };
+    if (stage === 'closed') return { label:'ЗАКРЫТА', color:'#475569' };
+    return { label:'В РАБОТЕ', color:'#d97706' };
+  }
+
+  function passportIdArg(value) {
+    return String(value || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  }
+
+  function currentPassport(scan) {
+    const list = readPassports();
+    if (state.passportId) {
+      const selected = list.find(item => item.id === state.passportId);
+      if (selected) return selected;
+    }
+    return list.find(item => {
+      const fields = item.fields || {};
+      return scan.article && fields.article === scan.article && scan.line && fields.line === scan.line &&
+        (!scan.baseLot || fields.baseLot === scan.baseLot);
+    }) || null;
+  }
+
+  function passportListHtml(list, active) {
+    if (!list.length) return '<div class="aspect-copilot-empty">Паспортов пока нет. Создайте первый из текущего контекста.</div>';
+    return list.slice().reverse().slice(0,8).map(item => {
+      const fields = item.fields || {};
+      const selected = active && active.id === item.id;
+      return '<button onclick="aspectCopilotOpenPassport(\'' + esc(passportIdArg(item.id)) + '\')" style="display:block;width:100%;text-align:left;border:1px solid ' + (selected ? '#a5b4fc' : '#e4ebf5') + ';border-radius:14px;padding:10px;margin-top:7px;background:' + (selected ? '#eef2ff' : '#fff') + ';cursor:pointer">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b style="font:900 10px/1.2 system-ui,sans-serif;color:#172033">' + esc(item.id) + '</b><span style="font:900 8px/1;color:' + passportStatusColor(item.status) + '">' + esc(item.status || 'НА ПРОВЕРКЕ') + '</span></div>' +
+        '<div style="margin-top:5px;color:#64748b;font:700 9px/1.35 system-ui,sans-serif">' + esc([fields.article, fields.line && 'линия ' + fields.line, fields.baseLot && 'лот ' + fields.baseLot].filter(Boolean).join(' · ') || 'Контекст ещё не заполнен') + '</div></button>';
+    }).join('');
+  }
+
+  function passportHtml(scan) {
+    const list = readPassports();
+    const active = currentPassport(scan);
+    if (active && !state.passportId) state.passportId = active.id;
+    const fields = active ? (active.fields || {}) : {};
+    const events = active && Array.isArray(active.events) ? active.events : [];
+    const autoStatus = passportAutoStatus(scan);
+    const status = active ? (active.status || 'НА ПРОВЕРКЕ') : autoStatus.label;
+    const stage = active ? (active.stage || 'work') : 'work';
+    const stageMeta = passportStageMeta(stage);
+    const locked = stage === 'closed';
+    const activeActor = active && (active.closedBy || active.reviewedBy) ? (active.closedBy || active.reviewedBy) : passportActor();
+    const workflowCard = locked
+      ? '<div class="aspect-copilot-card" style="background:#f1f5f9;border-color:#cbd5e1"><h4>🔒 Партия закрыта</h4><p>Изменения заблокированы. Ответственный: <b>' + esc(active.closedBy || active.reviewedBy || 'не указан') + '</b>' + (active.closedAt ? ' · ' + esc(new Date(active.closedAt).toLocaleString('ru-RU')) : '') + '</p><div class="aspect-copilot-actions"><button class="secondary" onclick="aspectCopilotExportPassport()">📄 PDF / печать</button><button class="ghost" onclick="aspectCopilotReopenPassport()">Открыть для продолжения</button></div></div>'
+      : '<div class="aspect-copilot-card"><h4>✅ Контроль закрытия</h4><p>Передайте паспорт ответственному на проверку. После закрытия редактирование и новые события будут заблокированы.</p><input id="aspect-passport-responsible" class="aspect-copilot-input" style="min-height:0" value="' + esc(activeActor) + '" placeholder="Кто проверяет партию">' + (stage === 'review' ? '<select id="aspect-passport-final-status" class="aspect-copilot-input" style="margin-top:7px;min-height:0"><option value="auto">Итог по данным (' + esc(autoStatus.label) + ')</option><option>ГОТОВА</option><option>НУЖНА КОРРЕКЦИЯ</option></select>' : '') + '<div class="aspect-copilot-actions"><button class="secondary" onclick="aspectCopilotSubmitPassport()">Передать на проверку</button>' + (stage === 'review' ? '<button onclick="aspectCopilotClosePassport()">Закрыть партию</button>' : '') + '<button class="ghost" onclick="aspectCopilotExportPassport()">📄 PDF</button></div></div>';
+    const activeCard = active
+      ? '<div class="aspect-copilot-grid">' +
+          stat('Этап', stageMeta.label) + stat('Итог', status) +
+          stat('ΔE сейчас', formatNum(fields.dE,2)) + stat('Риск', (fields.risk == null ? '—' : fields.risk + '/100')) +
+        '</div>' +
+        '<div class="aspect-copilot-card" style="border-color:' + passportStatusColor(status) + ';border-width:2px">' +
+          '<div style="display:flex;justify-content:space-between;gap:10px;align-items:start"><div><h4>📋 ' + esc(active.id) + '</h4><p style="margin:0">Создан: ' + esc(new Date(active.createdAt).toLocaleString('ru-RU')) + (active.order ? ' · Заказ: ' + esc(active.order) : '') + '</p></div><div style="text-align:right"><b style="display:block;color:' + stageMeta.color + ';font:900 9px/1.2 system-ui,sans-serif">' + esc(stageMeta.label) + '</b><b style="display:block;margin-top:4px;color:' + passportStatusColor(status) + ';font:900 9px/1.2 system-ui,sans-serif">' + esc(status) + '</b></div></div>' +
+          '<div style="margin-top:9px"><span class="aspect-copilot-chip">Артикул: ' + esc(fields.article || '—') + '</span><span class="aspect-copilot-chip">Линия: ' + esc(fields.line || '—') + '</span><span class="aspect-copilot-chip">Лот: ' + esc(fields.baseLot || '—') + '</span><span class="aspect-copilot-chip">Основа: ' + esc(fields.base || '—') + '</span></div>' +
+        '</div>' +
+        workflowCard +
+        (locked ? '' : '<div class="aspect-copilot-card"><h4>Добавить событие</h4>' +
+          '<div style="display:grid;grid-template-columns:minmax(120px,170px) 1fr;gap:7px">' +
+            '<select id="aspect-passport-event-kind" class="aspect-copilot-input" style="min-height:0"><option>Замер ΔE</option><option>Коррекция</option><option>Дефект</option><option>Проверка</option><option>Передача смены</option><option>Комментарий</option></select>' +
+            '<select id="aspect-passport-status" class="aspect-copilot-input" style="min-height:0"><option value="auto">Статус по данным (' + esc(autoStatus.label) + ')</option><option>НА ПРОВЕРКЕ</option><option>НУЖНА КОРРЕКЦИЯ</option><option>ГОТОВА</option></select>' +
+          '</div>' +
+          '<textarea id="aspect-passport-event-note" class="aspect-copilot-input" style="margin-top:7px;min-height:58px" placeholder="Что произошло? Например: повторный замер после высыхания, ΔE снизилась до 0,8"></textarea>' +
+          '<div class="aspect-copilot-actions"><button onclick="aspectCopilotAddPassportEvent()">Добавить событие</button><button class="secondary" onclick="aspectCopilotUpdatePassport()">Обновить из текущего состояния</button><button class="secondary" onclick="aspectCopilotExportPassport()">📄 PDF / печать</button><button class="ghost" onclick="aspectCopilotNewPassport()">Новый паспорт</button></div>' +
+        '</div>') +
+        '<div class="aspect-copilot-card"><h4>Лента партии</h4>' +
+          (events.length ? events.slice().reverse().map(event => '<div style="padding:9px 0;border-bottom:1px solid #edf2f7"><div style="display:flex;justify-content:space-between;gap:8px"><b style="font:900 10px/1.3 system-ui,sans-serif;color:#172033">' + esc(event.kind || 'Событие') + '</b><span style="color:#94a3b8;font:700 9px/1.3 system-ui,sans-serif">' + esc(new Date(event.at).toLocaleString('ru-RU')) + '</span></div><p style="margin:4px 0 0">' + esc(event.note || 'Состояние партии зафиксировано') + '</p>' + (event.snapshot && event.snapshot.dE != null ? '<span class="aspect-copilot-chip">ΔE ' + esc(formatNum(event.snapshot.dE,2)) + '</span>' : '') + (event.snapshot && event.snapshot.risk != null ? '<span class="aspect-copilot-chip">риск ' + esc(event.snapshot.risk + '/100') + '</span>' : '') + '</div>').join('') : '<div class="aspect-copilot-empty">Событий пока нет.</div>') +
+        '</div>'
+      : '<div class="aspect-copilot-card"><h4>Создать паспорт из текущего контекста</h4><p>В паспорт попадут текущие артикул, линия, лот основы, ΔE, риск запуска и комментарий. После этого каждое изменение можно фиксировать в ленте.</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:7px"><input id="aspect-passport-id" class="aspect-copilot-input" style="min-height:0" placeholder="Номер партии (например П-1042)"><input id="aspect-passport-order" class="aspect-copilot-input" style="min-height:0" placeholder="Заказ или клиент"></div><div class="aspect-copilot-actions"><button onclick="aspectCopilotCreatePassport()">Создать паспорт</button></div></div>';
+    return '<div class="aspect-copilot-card"><h4>🧾 Электронный паспорт партии</h4><p>Одна карточка связывает партию с артикулом, линией, лотом, измерениями и всеми решениями смены. Данные сохраняются на устройстве и синхронизируются с общей базой Apps Script.</p></div>' +
+      activeCard +
+      '<div class="aspect-copilot-card"><h4>Последние паспорта · ' + list.length + '</h4>' + passportListHtml(list, active) + '</div>';
+  }
+
+  function createPassport() {
+    const scan = state.scan || collectScan();
+    const id = text('aspect-passport-id') || ('П-' + new Date().toISOString().slice(0,16).replace(/[^\d]/g,''));
+    const list = readPassports();
+    if (list.some(item => item.id === id)) {
+      state.passportId = id;
+      renderCopilot();
+      if (typeof toast === 'function') toast('Паспорт с таким номером уже открыт');
+      return;
+    }
+    const now = new Date().toISOString();
+    const status = passportAutoStatus(scan);
+    list.push({
+      id,
+      order: text('aspect-passport-order'),
+      status: status.label,
+      stage: 'work',
+      createdAt: now,
+      updatedAt: now,
+      fields: passportSnapshot(scan),
+      events: [{ kind:'Создание паспорта', note:'Паспорт создан из текущего состояния приложения', at:now, snapshot:passportSnapshot(scan) }]
+    });
+    writePassports(list);
+    state.passportId = id;
+    renderCopilot();
+    if (typeof toast === 'function') toast('Паспорт партии создан');
+  }
+
+  function updatePassport() {
+    const scan = state.scan || collectScan();
+    const list = readPassports();
+    const passport = list.find(item => item.id === state.passportId);
+    if (!passport) return;
+    if (passport.stage === 'closed') {
+      if (typeof toast === 'function') toast('Партия закрыта — сначала откройте её для продолжения');
+      return;
+    }
+    const now = new Date().toISOString();
+    const selectedStatus = text('aspect-passport-status');
+    const status = selectedStatus && selectedStatus !== 'auto' ? selectedStatus : passportAutoStatus(scan).label;
+    passport.status = status;
+    passport.updatedAt = now;
+    passport.fields = passportSnapshot(scan);
+    passport.events = Array.isArray(passport.events) ? passport.events : [];
+    passport.events.push({ kind:'Обновление из приложения', note:'Зафиксированы текущие данные партии', at:now, snapshot:passportSnapshot(scan) });
+    writePassports(list);
+    renderCopilot();
+    if (typeof toast === 'function') toast('Паспорт обновлён');
+  }
+
+  function addPassportEvent() {
+    const list = readPassports();
+    const passport = list.find(item => item.id === state.passportId);
+    if (!passport) return;
+    if (passport.stage === 'closed') {
+      if (typeof toast === 'function') toast('Партия закрыта — сначала откройте её для продолжения');
+      return;
+    }
+    const note = text('aspect-passport-event-note');
+    if (!note) {
+      if (typeof toast === 'function') toast('Добавьте короткое описание события');
+      return;
+    }
+    const scan = state.scan || collectScan();
+    const selectedStatus = text('aspect-passport-status');
+    const now = new Date().toISOString();
+    passport.status = selectedStatus && selectedStatus !== 'auto' ? selectedStatus : passportAutoStatus(scan).label;
+    passport.updatedAt = now;
+    passport.fields = passportSnapshot(scan);
+    passport.events = Array.isArray(passport.events) ? passport.events : [];
+    passport.events.push({ kind:text('aspect-passport-event-kind') || 'Событие', note, at:now, snapshot:passportSnapshot(scan) });
+    writePassports(list);
+    renderCopilot();
+    if (typeof toast === 'function') toast('Событие добавлено в паспорт');
+  }
+
+  function submitPassport() {
+    const list = readPassports();
+    const passport = list.find(item => item.id === state.passportId);
+    if (!passport || passport.stage === 'closed') return;
+    const actor = text('aspect-passport-responsible') || passportActor();
+    if (!actor) {
+      if (typeof toast === 'function') toast('Укажите имя ответственного');
+      return;
+    }
+    const now = new Date().toISOString();
+    passport.stage = 'review';
+    passport.reviewedBy = actor;
+    passport.submittedAt = now;
+    passport.updatedAt = now;
+    passport.events = Array.isArray(passport.events) ? passport.events : [];
+    passport.events.push({ kind:'Передача на проверку', note:'Паспорт передан ответственному: ' + actor, at:now, actor });
+    try { localStorage.setItem('aspect_passport_actor', actor); } catch (e) {}
+    writePassports(list);
+    renderCopilot();
+    if (typeof toast === 'function') toast('Партия передана на проверку');
+  }
+
+  function closePassport() {
+    const list = readPassports();
+    const passport = list.find(item => item.id === state.passportId);
+    if (!passport || passport.stage === 'closed') return;
+    if (passport.stage !== 'review') {
+      if (typeof toast === 'function') toast('Сначала передайте партию на проверку');
+      return;
+    }
+    const actor = text('aspect-passport-responsible') || passport.reviewedBy || passportActor();
+    if (!actor) {
+      if (typeof toast === 'function') toast('Укажите имя ответственного');
+      return;
+    }
+    const now = new Date().toISOString();
+    const selectedOutcome = text('aspect-passport-final-status');
+    const outcome = selectedOutcome && selectedOutcome !== 'auto' ? selectedOutcome : passportAutoStatus(state.scan || collectScan()).label === 'ГОТОВА' ? 'ГОТОВА' : 'НУЖНА КОРРЕКЦИЯ';
+    passport.stage = 'closed';
+    passport.status = outcome;
+    passport.closedBy = actor;
+    passport.closedAt = now;
+    passport.updatedAt = now;
+    passport.events = Array.isArray(passport.events) ? passport.events : [];
+    passport.events.push({ kind:'Партия закрыта', note:'Итог: ' + outcome + '. Ответственный: ' + actor, at:now, actor, outcome });
+    try { localStorage.setItem('aspect_passport_actor', actor); } catch (e) {}
+    writePassports(list);
+    renderCopilot();
+    if (typeof toast === 'function') toast('Партия закрыта: ' + outcome);
+  }
+
+  function reopenPassport() {
+    const list = readPassports();
+    const passport = list.find(item => item.id === state.passportId);
+    if (!passport) return;
+    const actor = passportActor() || passport.closedBy || '';
+    const now = new Date().toISOString();
+    passport.stage = 'work';
+    passport.reopenedAt = now;
+    passport.updatedAt = now;
+    passport.events = Array.isArray(passport.events) ? passport.events : [];
+    passport.events.push({ kind:'Партия открыта повторно', note:'Редактирование возобновлено' + (actor ? ' · ' + actor : ''), at:now, actor });
+    writePassports(list);
+    renderCopilot();
+    if (typeof toast === 'function') toast('Паспорт снова открыт для работы');
+  }
+
+  function openPassport(id) { state.passportId = id; state.tab = 'passport'; renderCopilot(); }
+  function newPassport() { state.passportId = null; state.tab = 'passport'; renderCopilot(); }
+
+  function buildKnowledgeGraph(scan) {
+    const rows = [];
+    const parseTs = (item) => {
+      const raw = item.ts || item.createdAt || item.updatedAt || item.date || item.at || item.stamp;
+      if (typeof raw === 'number' && isFinite(raw)) return raw < 1e12 ? raw * 1000 : raw;
+      if (typeof raw === 'string' && raw) {
+        const p = Date.parse(raw);
+        return Number.isFinite(p) ? p : 0;
+      }
+      return 0;
+    };
+    const addRows = (items, source) => (Array.isArray(items) ? items : []).forEach(item => {
+      if (!item || typeof item !== 'object') return;
+      const article = item.article || item.art || item.articleNumber || item.name || '';
+      const line = item.line || item.lineNum || item.lineNumber || '';
+      const lot = item.baseLot || item.base_lot || item.lot || item.lotBase || '';
+      const dE = n(item.dE ?? item.de ?? item.deltaE ?? item.delta_e ?? item.delta);
+      const defect = item.defect || item.defectType || item.tag || item.type || item.kind || '';
+      rows.push({
+        source,
+        article: String(article || '').trim(),
+        line: String(line || '').trim(),
+        lot: String(lot || '').trim(),
+        dE,
+        defect: String(defect || '').trim(),
+        ts: parseTs(item)
+      });
+    });
+    addRows(state.recipes, 'рецепт');
+    addRows(state.batches, 'партия');
+    addRows(state.defects, 'CV');
+    safeJson('aspect_copilot_corrections', []).forEach(item => addRows([{
+      article: item.article, line: item.line, defect: 'коррекция', at: item.at
+    }], 'коррекция'));
+
+    // Фильтры: период (дни) + линия
+    const days = Number(state.knowledgeDays) || 0; // 0 = всё время
+    const lineFilter = String(state.knowledgeLine || '').trim().toLowerCase();
+    const cutoff = days > 0 ? Date.now() - days * 86400000 : 0;
+    let scoped = rows;
+    if (cutoff > 0) scoped = scoped.filter(row => !row.ts || row.ts >= cutoff);
+    if (lineFilter) scoped = scoped.filter(row => row.line && row.line.toLowerCase().includes(lineFilter));
+
+    const countBy = key => {
+      const map = new Map();
+      scoped.forEach(row => { const value = row[key]; if (value) map.set(value, (map.get(value) || 0) + 1); });
+      return [...map.entries()].sort((a, b) => b[1] - a[1]);
+    };
+    const links = [];
+    scoped.forEach(row => {
+      if (row.article && row.line) links.push({ left: row.article, right: 'линия ' + row.line, kind: 'работает на' });
+      if (row.article && row.lot) links.push({ left: row.article, right: 'лот ' + row.lot, kind: 'использует' });
+      if (row.line && row.defect) links.push({ left: 'линия ' + row.line, right: row.defect, kind: 'сигнал' });
+    });
+    const linkCount = new Map();
+    links.forEach(link => {
+      const key = link.left + '|' + link.kind + '|' + link.right;
+      linkCount.set(key, { ...link, count: (linkCount.get(key)?.count || 0) + 1 });
+    });
+    const query = String(state.knowledgeQuery || '').trim().toLowerCase();
+    const filtered = query
+      ? scoped.filter(row => [row.article, row.line, row.lot, row.defect].join(' ').toLowerCase().includes(query))
+      : scoped;
+    const current = scoped.filter(row => scan.article && row.article && row.article.toLowerCase() === scan.article.toLowerCase());
+    const deRows = scoped.map(row => row.dE).filter(value => value != null && isFinite(value));
+    const averageDE = deRows.length ? deRows.reduce((sum, value) => sum + value, 0) / deRows.length : null;
+    const suspiciousLots = countBy('lot').filter(item => item[1] >= 2).slice(0, 5);
+    const recurringDefects = countBy('defect').filter(item => item[1] >= 2).slice(0, 5);
+    const lineSignals = countBy('line').filter(item => item[1] >= 2).slice(0, 5);
+    const topLinks = [...linkCount.values()].sort((a, b) => b.count - a.count).slice(0, 8);
+    const allLines = [...new Set(rows.map(r => r.line).filter(Boolean))].sort();
+    return {
+      rows: scoped,
+      filtered,
+      current,
+      averageDE,
+      suspiciousLots,
+      recurringDefects,
+      lineSignals,
+      topLinks,
+      allLines,
+      totalBeforeFilter: rows.length,
+      nodeCount: new Set(scoped.flatMap(row => [row.article, row.line, row.lot, row.defect].filter(Boolean))).size,
+      linkCount: links.length
+    };
+  }
+
+  function inferRootCauses(scan, graph) {
+    const hypotheses = [];
+    const currentLot = String(scan.baseLot || '').toLowerCase();
+    const currentLine = String(scan.line || '').toLowerCase();
+    const currentArticle = String(scan.article || '').toLowerCase();
+    const lotHit = graph.suspiciousLots.find(item => currentLot && String(item[0]).toLowerCase() === currentLot);
+    const lineHit = graph.lineSignals.find(item => currentLine && String(item[0]).toLowerCase() === currentLine);
+    const articleRows = graph.rows.filter(row => currentArticle && row.article.toLowerCase() === currentArticle);
+    const articleHighDE = articleRows.filter(row => row.dE != null && row.dE > 1.5).length;
+    const defectHit = graph.recurringDefects[0];
+
+    if (lotHit) hypotheses.push({
+      title:'Дрейф лота сырья', confidence:Math.min(96, 62 + lotHit[1] * 7),
+      evidence:'Лот «' + lotHit[0] + '» встречается в истории ' + lotHit[1] + ' раз и совпадает с текущим лотом.',
+      action:'Сделать контрольный замес на другом лоте или снизить дозировку после подтверждения силы.'
+    });
+    if (lineHit) hypotheses.push({
+      title:'Паттерн конкретной линии', confidence:Math.min(92, 56 + lineHit[1] * 6),
+      evidence:'По линии «' + lineHit[0] + '» накоплено ' + lineHit[1] + ' связанных записей.',
+      action:'Проверить секцию печати, ракель и скорость; сравнить с лучшей линией для этого артикула.'
+    });
+    if (defectHit) hypotheses.push({
+      title:'Повторяющийся тип дефекта', confidence:Math.min(90, 52 + defectHit[1] * 8),
+      evidence:'Сигнал «' + defectHit[0] + '» повторяется ' + defectHit[1] + ' раз в доступной истории.',
+      action:'Открыть карту рулона и сопоставить период дефекта с валом, клише или секцией линии.'
+    });
+    if (articleHighDE >= 2 || scan.correctionCount > 2) hypotheses.push({
+      title:'Нестабильность рецепта', confidence:Math.min(88, 58 + articleHighDE * 6 + scan.correctionCount * 3),
+      evidence:'Для текущего артикула найдено ' + articleHighDE + ' замеров выше ΔE 1.5; коррекций в памяти: ' + scan.correctionCount + '.',
+      action:'Выбрать лучший подтверждённый прецедент, не продолжать цепочку мелких коррекций.'
+    });
+    if (!scan.baseLot || scan.dE == null || !scan.hasColorPair) hypotheses.push({
+      title:'Недостаток измерительных данных', confidence:68,
+      evidence:'Не хватает ' + [!scan.baseLot && 'лота основы', scan.dE == null && 'ΔE', !scan.hasColorPair && 'пары образцов'].filter(Boolean).join(', ') + '.',
+      action:'Сначала заполнить трассировку и повторить замер — иначе любая причина будет слабой гипотезой.'
+    });
+    if (!hypotheses.length) hypotheses.push({
+      title:'Причина пока не подтверждена', confidence:28,
+      evidence:'В локальной истории недостаточно повторов, чтобы честно ранжировать гипотезы.',
+      action:'Сохранить следующий замес с лотом, линией, фото и ΔE.'
+    });
+    return hypotheses.sort((a,b) => b.confidence - a.confidence).slice(0,4);
+  }
+
+  function rootCauseHtml(scan, graph) {
+    const causes = inferRootCauses(scan, graph);
+    return '<div class="aspect-copilot-card"><h4>🧠 Вероятные первопричины</h4><p>Ранжирование построено по повторяемым локальным сигналам, а не по одному неудачному замесу. Процент — уверенность гипотезы, не доказательство.</p>' +
+      causes.map((cause, index) => '<div style="padding:10px 0;border-bottom:1px solid #edf2f7"><div style="display:flex;justify-content:space-between;gap:8px;font:900 11px/1.3 system-ui,sans-serif"><span>' + (index + 1) + '. ' + esc(cause.title) + '</span><b style="color:' + (cause.confidence >= 70 ? '#dc2626' : cause.confidence >= 45 ? '#d97706' : '#64748b') + '">' + cause.confidence + '%</b></div><div class="aspect-copilot-meter" style="height:6px"><i style="width:' + cause.confidence + '%"></i></div><p style="margin:5px 0 0">Доказательство: ' + esc(cause.evidence) + '</p><p style="margin:4px 0 0;color:#1e3a8a">→ Действие: ' + esc(cause.action) + '</p></div>').join('') +
+      '</div>';
+  }
+
+  function knowledgeHtml(scan) {
+    const graph = buildKnowledgeGraph(scan);
+    const list = (items, empty) => items.length ? '<ul>' + items.map(item => '<li>• ' + esc(item[0]) + ' <b style="color:#3730a3">×' + item[1] + '</b></li>').join('') + '</ul>' : '<p>' + esc(empty) + '</p>';
+    const links = graph.topLinks.length ? graph.topLinks.map(link => '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:7px 0;border-bottom:1px solid #edf2f7;font:800 10px/1.3 system-ui,sans-serif"><span class="aspect-copilot-chip">' + esc(link.left) + '</span><span style="color:#94a3b8">→ ' + esc(link.kind) + ' →</span><span class="aspect-copilot-chip">' + esc(link.right) + '</span><b style="color:#3730a3">×' + link.count + '</b></div>').join('') : '<p>Связей пока недостаточно. Сохраните несколько рецептов или партий.</p>';
+    const days = Number(state.knowledgeDays) || 0;
+    const lineVal = state.knowledgeLine || '';
+    const filterParts = [];
+    if (days > 0) filterParts.push('период ' + days + ' дн.');
+    if (lineVal) filterParts.push('линия «' + lineVal + '»');
+    if (state.knowledgeQuery) filterParts.push('поиск «' + state.knowledgeQuery + '»');
+    const matchNote = filterParts.length
+      ? 'Фильтр: ' + filterParts.join(' · ') + ' → ' + graph.filtered.length + ' из ' + graph.totalBeforeFilter
+      : 'Все доступные локальные записи (' + graph.totalBeforeFilter + ')';
+    const dayOpts = [[0, 'Всё время'], [7, '7 дней'], [30, '30 дней'], [90, '90 дней']]
+      .map(([v, label]) => '<option value="' + v + '"' + (days === v ? ' selected' : '') + '>' + label + '</option>').join('');
+    const lineOpts = '<option value="">Все линии</option>' +
+      (graph.allLines || []).map(l => '<option value="' + esc(l) + '"' + (lineVal === l ? ' selected' : '') + '>' + esc(l) + '</option>').join('');
+    return '<div class="aspect-copilot-grid">' +
+      stat('Узлов памяти', graph.nodeCount) + stat('Связей', graph.linkCount) +
+      stat('Средний ΔE', formatNum(graph.averageDE, 2)) + stat('По артикулу', graph.current.length || '—') + '</div>' +
+      '<div class="aspect-copilot-card"><h4>🧬 Карта знаний производства</h4><p>Copilot связывает записи, которые уже есть на устройстве. Никаких догадок о причинах: повтор считается только при совпадении данных в истории.</p>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px">' +
+        '<select id="aspect-copilot-knowledge-days" class="aspect-copilot-input" style="min-height:0" onchange="aspectCopilotSearchKnowledge()">' + dayOpts + '</select>' +
+        '<select id="aspect-copilot-knowledge-line" class="aspect-copilot-input" style="min-height:0" onchange="aspectCopilotSearchKnowledge()">' + lineOpts + '</select>' +
+      '</div>' +
+      '<div style="display:flex;gap:7px;margin-top:7px"><input id="aspect-copilot-knowledge-search" value="' + esc(state.knowledgeQuery || '') + '" class="aspect-copilot-input" style="min-height:0;flex:1" placeholder="Поиск по артикулу, лоту, линии или дефекту"><button onclick="aspectCopilotSearchKnowledge()" style="border:0;border-radius:12px;padding:0 12px;color:#fff;background:#3730a3;font:900 9px system-ui;cursor:pointer">Найти</button></div><p style="margin:7px 0 0;color:#94a3b8">' + esc(matchNote) + '</p></div>' +
+      '<div class="aspect-copilot-card"><h4>⚠️ Повторяющиеся сигналы</h4><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><p style="margin:0 0 4px;font-weight:900">Лоты</p>' + list(graph.suspiciousLots, 'Повторов по лотам не найдено') + '</div><div><p style="margin:0 0 4px;font-weight:900">Дефекты</p>' + list(graph.recurringDefects, 'Повторных дефектов не найдено') + '</div><div><p style="margin:0 0 4px;font-weight:900">Линии</p>' + list(graph.lineSignals, 'Недостаточно сигналов по линиям') + '</div></div></div>' +
+      rootCauseHtml(scan, graph) +
+      '<div class="aspect-copilot-card"><h4>🔗 Самые сильные связи</h4>' + links + '</div>' +
+      '<div class="aspect-copilot-card"><h4>📌 Текущий контекст</h4>' + (graph.current.length ? '<ul>' + graph.current.slice(0, 6).map(row => '<li>• ' + esc([row.source, row.article, row.line && 'линия ' + row.line, row.lot && 'лот ' + row.lot, row.defect].filter(Boolean).join(' · ')) + (row.dE != null ? ' · ΔE ' + formatNum(row.dE, 2) : '') + '</li>').join('') + '</ul>' : '<p>Для текущего артикула совпадений пока нет. Сохраните рецепт или партию — связь появится автоматически.</p>') + '</div>';
+  }
+
+  function renderCopilot() {
+    const scan = state.scan || collectScan();
+    state.scan = scan;
+    const content = state.tab === 'risk' ? riskHtml(scan) : state.tab === 'correction' ? correctionHtml(scan) : state.tab === 'handover' ? handoverHtml(scan) : state.tab === 'knowledge' ? knowledgeHtml(scan) : state.tab === 'passport' ? passportHtml(scan) : overviewHtml(scan);
+    const tabs = [['overview','Сводка'],['passport','Паспорт партии'],['risk','Риск запуска'],['correction','Коррекция'],['knowledge','Знания'],['handover','Смена']];
+    const tabsHtml = tabs.map(item => '<button class="aspect-copilot-tab ' + (state.tab === item[0] ? 'active' : '') + '" onclick="aspectCopilotSetTab(\'' + item[0] + '\')">' + item[1] + '</button>').join('');
+    const root = byId('aspect-copilot-root');
+    if (!root) return;
+    const gwOk = location.protocol !== 'file:' && navigator.onLine;
+    const gwBtn = gwOk
+      ? '<button class="secondary" onclick="aspectCopilotAskGateway()">⚡ AI-gateway</button>'
+      : '<button class="ghost" onclick="aspectCopilotAskGateway()" title="Нужен хостинг + aspect-copilot-gateway.js">⚡ AI-gateway (нет сервера)</button>';
+    root.innerHTML = '<div class="aspect-copilot-head"><div style="display:flex;justify-content:space-between;align-items:start;gap:10px"><div><div style="font:900 9px/1 system-ui,sans-serif;letter-spacing:.12em;opacity:.72;text-transform:uppercase">Aspect Intelligence</div><div style="margin-top:5px;font:900 20px/1.1 system-ui,sans-serif">🤖 Copilot производства</div><div style="margin-top:6px;font:700 10px/1.4 system-ui,sans-serif;opacity:.82">Объяснимый контроль цвета, партии и смены</div></div><button onclick="aspectCopilotClose()" style="border:0;border-radius:12px;padding:8px 10px;color:#fff;background:rgba(255,255,255,.14);font:900 11px system-ui;cursor:pointer">✕</button></div></div><div class="aspect-copilot-tabs">' + tabsHtml + '</div><div class="aspect-copilot-body">' + content + '<div class="aspect-copilot-card"><h4>Спросить Copilot</h4><textarea id="aspect-copilot-question" class="aspect-copilot-input" rows="2" placeholder="Например: что проверить перед запуском этой партии?"></textarea><div class="aspect-copilot-actions"><button class="secondary" onclick="aspectCopilotAsk()">Локальный разбор</button>' + gwBtn + '<button class="ghost" onclick="aspectCopilotScan()">↻ Обновить состояние</button></div><div id="aspect-copilot-answer"></div></div></div>';
+  }
+
+  function openCopilot() {
+    const modal = byId('aspect-copilot-modal');
+    if (!modal) return;
+    state.tab = 'overview';
+    state.scan = collectScan();
+    modal.classList.remove('hidden');
+    renderCopilot();
+    enrichScan(state.scan);
+  }
+  function closeCopilot() { const modal = byId('aspect-copilot-modal'); if (modal) modal.classList.add('hidden'); }
+  function setTab(tab) { state.tab = tab; renderCopilot(); }
+  function scan() { state.scan = collectScan(); renderCopilot(); enrichScan(state.scan); }
+  function go(tab) {
+    closeCopilot();
+    if (typeof switchView === 'function') switchView(tab);
+  }
+  function saveReport() {
+    const report = { ...state.scan, savedAt: new Date().toISOString() };
+    const list = safeJson('aspect_copilot_reports', []);
+    list.push(report);
+    try { localStorage.setItem('aspect_copilot_reports', JSON.stringify(list.slice(-50))); } catch (e) {}
+    if (typeof toast === 'function') toast('Снимок Copilot сохранён');
+  }
+  function saveCorrection() {
+    const note = text('aspect-copilot-correction-note');
+    if (!note) return;
+    const list = safeJson('aspect_copilot_corrections', []);
+    list.push({ note, article: state.scan && state.scan.article, line: state.scan && state.scan.line, at: new Date().toISOString() });
+    try { localStorage.setItem('aspect_copilot_corrections', JSON.stringify(list.slice(-100))); } catch (e) {}
+    if (typeof addAIMessage === 'function') addAIMessage('🧪 Copilot: рекомендация по коррекции сохранена — ' + note);
+    if (typeof toast === 'function') toast('Рекомендация сохранена в журнал Copilot');
+  }
+  function copyHandover() {
+    const value = text('aspect-copilot-handover');
+    if (navigator.clipboard && value) navigator.clipboard.writeText(value).then(() => { if (typeof toast === 'function') toast('Передача смены скопирована'); });
+  }
+  function saveHandover() {
+    const value = text('aspect-copilot-handover');
+    if (!value) return;
+    const list = safeJson('aspect_copilot_handovers', []);
+    list.push({ text:value, at:new Date().toISOString() });
+    try { localStorage.setItem('aspect_copilot_handovers', JSON.stringify(list.slice(-30))); } catch (e) {}
+    if (typeof addAIMessage === 'function') addAIMessage('📤 Copilot: передача смены сохранена');
+    if (typeof toast === 'function') toast('Передача смены сохранена локально');
+  }
+  function searchKnowledge() {
+    state.knowledgeQuery = text('aspect-copilot-knowledge-search');
+    const daysEl = byId('aspect-copilot-knowledge-days');
+    const lineEl = byId('aspect-copilot-knowledge-line');
+    if (daysEl) state.knowledgeDays = parseInt(daysEl.value, 10) || 0;
+    if (lineEl) state.knowledgeLine = (lineEl.value || '').trim();
+    renderCopilot();
+  }
+  function gatewayAvailable() {
+    // file:// и чистый offline — gateway заведомо недоступен
+    if (location.protocol === 'file:') return false;
+    if (!navigator.onLine) return false;
+    return true;
+  }
+  async function askGateway() {
+    const answer = byId('aspect-copilot-answer');
+    if (!answer) return;
+    if (!gatewayAvailable()) {
+      answer.innerHTML = '<div class="aspect-copilot-card" style="margin-top:10px;background:#fff7ed;border-color:#fed7aa"><p style="margin:0 0 6px">⚡ <b>AI-gateway недоступен</b></p><p style="margin:0">Откройте приложение с хостинга (не file://) и убедитесь, что запущен сервер <code>aspect-copilot-gateway.js</code> с endpoint <code>/api/copilot/analyze</code>. Покажу локальный разбор.</p></div>';
+      ask();
+      return;
+    }
+    const scan = state.scan || collectScan();
+    const question = text('aspect-copilot-question') || 'Определи наиболее вероятную первопричину и следующий шаг перед запуском.';
+    const graph = buildKnowledgeGraph(scan);
+    answer.innerHTML = '<div class="aspect-copilot-card" style="margin-top:10px;background:#eef4ff;border-color:#c7d2fe"><p style="margin:0">⚡ Подключаю защищённый AI-gateway…</p></div>';
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+      const response = await fetch('/api/copilot/analyze', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        signal: controller.signal,
+        body:JSON.stringify({
+          question,
+          scan,
+          knowledge:{
+            rows:graph.rows.slice(-160),
+            topLinks:graph.topLinks,
+            suspiciousLots:graph.suspiciousLots,
+            recurringDefects:graph.recurringDefects,
+            lineSignals:graph.lineSignals
+          }
+        })
+      });
+      clearTimeout(timer);
+      if (!response.ok) throw new Error('gateway HTTP ' + response.status);
+      const payload = await response.json();
+      const body = String(payload.answer || payload.message || '').trim();
+      if (!body) throw new Error('empty gateway response');
+      const source = payload.source === 'model' ? 'серверная модель' : 'серверный fallback';
+      answer.innerHTML = '<div class="aspect-copilot-card" style="margin-top:10px;background:#ecfdf5;border-color:#a7f3d0"><p style="margin:0 0 7px">⚡ <b>AI-gateway · ' + esc(source) + '</b></p><p style="margin:0;white-space:pre-line">' + esc(body) + '</p></div>';
+    } catch (error) {
+      const reason = error && error.name === 'AbortError' ? 'таймаут 12 с' : (error && error.message ? error.message : 'сеть');
+      ask();
+      const localAnswer = byId('aspect-copilot-answer');
+      if (localAnswer) localAnswer.innerHTML += '<p style="margin:7px 0 0;color:#94a3b8;font:700 9px/1.4 system-ui">Gateway недоступен (' + esc(reason) + ') — показан локальный анализ. Нужен сервер aspect-copilot-gateway.js.</p>';
+    }
+  }
+  function ask() {
+    const q = text('aspect-copilot-question').toLowerCase();
+    const answer = byId('aspect-copilot-answer');
+    if (!answer) return;
+    const scan = state.scan || collectScan();
+    let response = q.includes('запуск') || q.includes('провер')
+      ? 'Перед запуском: подтвердите ΔE, проверьте лот основы, выберите линию и сохраните фото эталона/замеса. Сейчас риск ' + scan.risk + '/100.'
+      : q.includes('причин') || q.includes('почему')
+      ? (function () {
+          const graph = buildKnowledgeGraph(scan);
+          const top = inferRootCauses(scan, graph)[0];
+          return 'Наиболее вероятная причина: «' + top.title + '» (' + top.confidence + '%). ' + top.evidence + ' Действие: ' + top.action;
+        })()
+      : q.includes('брак') || q.includes('дефект')
+      ? 'Для расследования нужен метр рулона, фото дефекта и привязка к секции. Откройте «Контроль брака» — там уже есть карта рулона и журнал CV.'
+      : q.includes('смен') || q.includes('передач')
+      ? 'Откройте вкладку «Смена»: Copilot соберёт артикул, линию, ΔE, незавершённые действия и контекст рецепта в один текст.'
+      : 'Я могу разобрать риск запуска, коррекцию цвета, дефект или передачу смены. Сформулируйте вопрос через один из этих контекстов.';
+    answer.innerHTML = '<div class="aspect-copilot-card" style="margin-top:10px;background:#eef4ff;border-color:#c7d2fe"><p style="margin:0">💡 ' + esc(response) + '</p></div>';
+  }
+
+  window.aspectCopilotSetTab = setTab;
+  window.aspectCopilotOpen = openCopilot;
+  window.aspectCopilotRender = renderCopilot;
+  window.aspectCopilotClose = closeCopilot;
+  window.aspectCopilotScan = scan;
+  window.aspectCopilotGo = go;
+  window.aspectCopilotSaveReport = saveReport;
+  window.aspectCopilotSaveCorrection = saveCorrection;
+  window.aspectCopilotCopyHandover = copyHandover;
+  window.aspectCopilotSaveHandover = saveHandover;
+  window.aspectCopilotSearchKnowledge = searchKnowledge;
+  window.aspectCopilotAskGateway = askGateway;
+  // Автособытие из основного приложения (ΔE, «Налил» и т.п.).
+  // Не создаёт паспорт само — пишет только в уже открытый / совпавший по артикулу+линии.
+  // Дедуп: не пишем то же самое событие чаще раза в 45 секунд.
+  let lastAutoEventKey = '';
+  let lastAutoEventAt = 0;
+  function autoPassportEvent(kind, note, extra) {
+    const scan = state.scan || collectScan();
+    const list = readPassports();
+    let passport = null;
+    if (state.passportId) passport = list.find(item => item.id === state.passportId);
+    if (!passport && scan.article) {
+      passport = list.find(item => {
+        const f = item.fields || {};
+        return f.article === scan.article && (!scan.line || f.line === scan.line) &&
+          (!scan.baseLot || !f.baseLot || f.baseLot === scan.baseLot) && item.stage !== 'closed';
+      });
+    }
+    if (!passport || passport.stage === 'closed') return false;
+    const key = passport.id + '|' + kind + '|' + String(note || '').slice(0, 80);
+    const nowMs = Date.now();
+    if (key === lastAutoEventKey && (nowMs - lastAutoEventAt) < 45000) return false;
+    lastAutoEventKey = key;
+    lastAutoEventAt = nowMs;
+    const now = new Date().toISOString();
+    const snap = passportSnapshot(scan);
+    if (extra && extra.dE != null) snap.dE = extra.dE;
+    passport.updatedAt = now;
+    passport.fields = Object.assign({}, passport.fields || {}, snap);
+    if (extra && extra.dE != null) {
+      const auto = passportAutoStatus(Object.assign({}, scan, { dE: extra.dE }));
+      if (passport.stage === 'work') passport.status = auto.label;
+    }
+    passport.events = Array.isArray(passport.events) ? passport.events : [];
+    passport.events.push({ kind: kind || 'Событие', note: note || '', at: now, snapshot: snap, auto: true });
+    writePassports(list);
+    const modal = byId('aspect-copilot-modal');
+    if (modal && !modal.classList.contains('hidden') && state.tab === 'passport') renderCopilot();
+    return true;
+  }
+  window.aspectCopilotAutoEvent = autoPassportEvent;
+
+  // Создать/обновить паспорт при создании производственной бирки
+  function ensurePassportFromBatch(batch) {
+    if (!batch || !batch.code) return;
+    const list = readPassports();
+    let passport = list.find(item => item.id === batch.code || (item.fields && item.fields.article === batch.article && item.order === batch.code));
+    const now = new Date().toISOString();
+    const scan = {
+      article: batch.article || '',
+      line: '',
+      base: batch.base || '',
+      baseLot: batch.baseLot || '',
+      dE: batch.dE,
+      theo: '',
+      actual: '',
+      hasColorPair: Boolean(batch.photoBefore && batch.photoAfter),
+      risk: batch.dE != null && batch.dE > 1.5 ? 70 : 25,
+      status: { label: batch.dE != null && batch.dE > 1.5 ? 'НУЖНА КОРРЕКЦИЯ' : 'НА ПРОВЕРКЕ' },
+      comment: batch.client ? 'Клиент: ' + batch.client : ''
+    };
+    if (!passport) {
+      passport = {
+        id: batch.code,
+        order: batch.client || batch.code,
+        status: passportAutoStatus(scan).label,
+        stage: 'work',
+        createdAt: now,
+        updatedAt: now,
+        fields: passportSnapshot(scan),
+        events: [{ kind: 'Создание с бирки', note: 'Паспорт создан из бирки ' + batch.code + (batch.master ? ' · мастер ' + batch.master : ''), at: now, snapshot: passportSnapshot(scan) }]
+      };
+      list.push(passport);
+    } else {
+      passport.updatedAt = now;
+      passport.fields = Object.assign({}, passport.fields || {}, passportSnapshot(scan));
+      passport.events = Array.isArray(passport.events) ? passport.events : [];
+      passport.events.push({ kind: 'Бирка обновлена', note: 'Связано с биркой ' + batch.code, at: now, snapshot: passportSnapshot(scan) });
+    }
+    writePassports(list);
+    state.passportId = passport.id;
+  }
+  window.aspectCopilotEnsureFromBatch = ensurePassportFromBatch;
+
+  // Текстовый/печатный экспорт паспорта (окно печати → PDF)
+  function exportPassportPrint() {
+    const list = readPassports();
+    const passport = list.find(item => item.id === state.passportId) || currentPassport(state.scan || collectScan());
+    if (!passport) {
+      if (typeof toast === 'function') toast('Сначала откройте или создайте паспорт');
+      return;
+    }
+    const f = passport.fields || {};
+    const events = Array.isArray(passport.events) ? passport.events : [];
+    const html = '<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8"><title>Паспорт ' + esc(passport.id) + '</title>' +
+      '<style>body{font:14px/1.45 system-ui,sans-serif;color:#111;max-width:720px;margin:24px auto;padding:0 16px}' +
+      'h1{font-size:20px;margin:0 0 8px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;margin:20px 0 8px;color:#334}' +
+      '.chip{display:inline-block;padding:4px 8px;margin:2px;border-radius:999px;background:#eef2ff;font-size:12px}' +
+      'table{width:100%;border-collapse:collapse;font-size:12px}td,th{border-bottom:1px solid #e5e7eb;padding:8px 6px;text-align:left}' +
+      '@media print{body{margin:0}}</style></head><body>' +
+      '<h1>📋 Паспорт партии ' + esc(passport.id) + '</h1>' +
+      '<p>Создан: ' + esc(new Date(passport.createdAt).toLocaleString('ru-RU')) +
+      (passport.order ? ' · Заказ: ' + esc(passport.order) : '') +
+      ' · Этап: ' + esc(passport.stage || 'work') + ' · Статус: <b>' + esc(passport.status || '') + '</b></p>' +
+      '<div><span class="chip">Артикул: ' + esc(f.article || '—') + '</span>' +
+      '<span class="chip">Линия: ' + esc(f.line || '—') + '</span>' +
+      '<span class="chip">Лот: ' + esc(f.baseLot || '—') + '</span>' +
+      '<span class="chip">Основа: ' + esc(f.base || '—') + '</span>' +
+      (f.dE != null ? '<span class="chip">ΔE ' + esc(formatNum(f.dE, 2)) + '</span>' : '') +
+      (f.risk != null ? '<span class="chip">Риск ' + esc(f.risk + '/100') + '</span>' : '') + '</div>' +
+      '<h2>Лента событий</h2><table><thead><tr><th>Время</th><th>Событие</th><th>Комментарий</th></tr></thead><tbody>' +
+      events.map(ev => '<tr><td>' + esc(new Date(ev.at).toLocaleString('ru-RU')) + '</td><td>' + esc(ev.kind || '') + '</td><td>' + esc(ev.note || '') + '</td></tr>').join('') +
+      '</tbody></table><p style="margin-top:24px;color:#64748b;font-size:11px">Аспект.РУ · электронный паспорт партии</p>' +
+      '<script>window.onload=function(){window.print()}<\/script></body></html>';
+    const w = window.open('', '_blank', 'noopener,noreferrer,width=800,height=900');
+    if (!w) {
+      if (typeof toast === 'function') toast('Разрешите всплывающие окна для экспорта');
+      return;
+    }
+    w.document.write(html);
+    w.document.close();
+  }
+  window.aspectCopilotExportPassport = exportPassportPrint;
+
+  window.aspectCopilotAsk = ask;
+  window.aspectCopilotCreatePassport = createPassport;
+  window.aspectCopilotUpdatePassport = updatePassport;
+  window.aspectCopilotAddPassportEvent = addPassportEvent;
+  window.aspectCopilotOpenPassport = openPassport;
+  window.aspectCopilotNewPassport = newPassport;
+  window.aspectCopilotSubmitPassport = submitPassport;
+  window.aspectCopilotClosePassport = closePassport;
+  window.aspectCopilotReopenPassport = reopenPassport;
+  window.aspectCopilotReadPassports = readPassports;
+  window.aspectCopilotWritePassports = writePassports;
+  window.aspectCopilotMergePassports = mergePassportLists;
+
+  // Минимальные самопроверки (консоль: aspectCopilotSelfTest())
+  function selfTest() {
+    const results = [];
+    const ok = (name, pass, detail) => results.push({ name, pass: !!pass, detail: detail || '' });
+    // 1) merge сохраняет события с обоих устройств
+    const a = { id: 'T1', updatedAt: '2026-01-01T10:00:00Z', events: [{ at: '2026-01-01T09:00:00Z', kind: 'A', note: '1' }], fields: {} };
+    const b = { id: 'T1', updatedAt: '2026-01-01T11:00:00Z', events: [{ at: '2026-01-01T10:30:00Z', kind: 'B', note: '2' }], fields: { article: 'X' } };
+    const merged = mergePassportLists([a], [b]);
+    ok('mergePassportLists events', merged.length === 1 && (merged[0].events || []).length === 2, 'events=' + ((merged[0] && merged[0].events) || []).length);
+    ok('mergePassportLists winner fields', merged[0] && merged[0].fields && merged[0].fields.article === 'X');
+    // 2) normalizePassport проставляет schemaVersion
+    const norm = normalizePassport({ id: 'T2' });
+    ok('normalizePassport schemaVersion', norm && norm.schemaVersion === 1);
+    ok('normalizePassport stage', norm && norm.stage === 'work');
+    // 3) risk heuristics: нет ΔE → выше риска, чем с низким ΔE
+    const high = collectScan(); // текущий контекст
+    ok('collectScan returns risk', high && typeof high.risk === 'number' && high.risk >= 0 && high.risk <= 100, 'risk=' + (high && high.risk));
+    // 4) gatewayAvailable / file protocol
+    ok('gatewayAvailable defined', typeof gatewayAvailable === 'function');
+    const failed = results.filter(r => !r.pass);
+    console.log('[aspectCopilotSelfTest]', failed.length ? 'FAIL' : 'OK', results);
+    return { ok: failed.length === 0, results };
+  }
+  window.aspectCopilotSelfTest = selfTest;
+
+  const fab = document.createElement('button');
+  fab.id = 'aspect-copilot-fab'; fab.type = 'button'; fab.innerHTML = '🤖 Copilot';
+  fab.title = 'Открыть интеллектуальный контроль производства';
+  fab.addEventListener('click', openCopilot);
+  document.body.appendChild(fab);
+
+  const modal = document.createElement('div');
+  modal.id = 'aspect-copilot-modal'; modal.className = 'hidden';
+  modal.addEventListener('click', event => { if (event.target === modal) closeCopilot(); });
+  modal.innerHTML = '<div class="aspect-copilot-sheet"><div id="aspect-copilot-root"></div></div>';
+  document.body.appendChild(modal);
+})();
+
+</script>
+</body></html>`);
   win.document.close();
 }
 
@@ -25905,6 +27199,13 @@ function renderPhotoCompareDeltaE() {
   else if (dE <= 3.5) verdict.textContent = '⚠️ Небольшое отличие — проверьте глазами';
   else if (dE <= 5) verdict.textContent = '⚠️ Заметное отличие — нужна коррекция';
   else verdict.textContent = '❌ Большое отличие — партия не принимается';
+  // Автособытие в паспорт: фиксируем замер ΔE без ручного ввода
+  if (typeof window.aspectCopilotAutoEvent === 'function') {
+    try {
+      const note = 'ΔE ' + Number(dE).toFixed(2) + ' · ' + (verdict.textContent || '').replace(/[✅⚠❌]/g, '').trim();
+      window.aspectCopilotAutoEvent('Замер ΔE', note, { dE: Number(dE) });
+    } catch (e) {}
+  }
 }
 // Переключает панель сравнения между "бок о бок" (для быстрой приёмки одним
 // взглядом) и "внахлёст со слайдером" (для поиска конкретной границы оттенка).
@@ -28422,849 +29723,68 @@ if (location.protocol === 'file:') {
   if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(warn, anchor.nextSibling);
 }
 </script>
-<style>
-  /* Aspect Copilot — локальный слой аналитики поверх существующего PWA */
-  #aspect-copilot-fab {
-    position: fixed; right: 16px; bottom: calc(74px + env(safe-area-inset-bottom));
-    z-index: 58; border: 1px solid rgba(255,255,255,.45); color: #fff;
-    padding: 11px 15px; border-radius: 999px; font: 900 10px/1 Inter,system-ui,sans-serif;
-    letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
-    background: linear-gradient(135deg,#7c3aed,#2563eb 58%,#0891b2);
-    box-shadow: 0 12px 30px rgba(37,99,235,.35), 0 2px 8px rgba(15,23,42,.22);
-    transition: transform .18s ease, filter .18s ease;
-  }
-  #aspect-copilot-fab:hover { transform: translateY(-2px); filter: saturate(1.15) brightness(1.05); }
-  #aspect-copilot-fab:active { transform: scale(.96); }
-  #aspect-copilot-modal { position: fixed; inset: 0; z-index: 59; display: flex; align-items: flex-end;
-    justify-content: center; padding: 12px; background: rgba(2,6,23,.62); backdrop-filter: blur(8px); }
-  #aspect-copilot-modal.hidden { display: none; }
-  .aspect-copilot-sheet { width: min(760px,100%); max-height: min(88vh,820px); overflow: auto;
-    color: #172033; background: #f8fbff; border: 1px solid rgba(255,255,255,.8);
-    border-radius: 28px; box-shadow: 0 28px 90px rgba(2,6,23,.38); animation: aspectCopilotIn .22s ease-out; }
-  @keyframes aspectCopilotIn { from { opacity: 0; transform: translateY(24px) scale(.98) } to { opacity: 1; transform: none } }
-  .aspect-copilot-head { padding: 18px 18px 14px; color: #fff; background:
-    radial-gradient(circle at 88% 0%,rgba(34,211,238,.45),transparent 34%),
-    linear-gradient(135deg,#172554,#3730a3 55%,#0e7490); border-radius: 28px 28px 0 0; }
-  .aspect-copilot-tabs { display: flex; gap: 6px; padding: 10px 14px 0; overflow-x: auto; }
-  .aspect-copilot-tab { flex: 0 0 auto; border: 0; border-radius: 12px; padding: 8px 10px; color: #64748b;
-    background: #e9f0fa; font: 900 9px/1 system-ui,sans-serif; text-transform: uppercase; cursor: pointer; }
-  .aspect-copilot-tab.active { color: #fff; background: #3730a3; }
-  .aspect-copilot-body { padding: 14px; }
-  .aspect-copilot-grid { display:grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; }
-  .aspect-copilot-stat { padding: 11px 10px; border: 1px solid #e4ebf5; border-radius: 16px; background: #fff; }
-  .aspect-copilot-stat small { display:block; color:#94a3b8; font: 900 8px/1.2 system-ui,sans-serif; text-transform:uppercase; }
-  .aspect-copilot-stat strong { display:block; margin-top:5px; color:#172033; font: 900 16px/1.1 system-ui,sans-serif; }
-  .aspect-copilot-card { margin-top: 10px; padding: 13px; border-radius: 18px; border: 1px solid #e4ebf5; background:#fff; }
-  .aspect-copilot-card h4 { margin:0 0 8px; font: 900 10px/1.2 system-ui,sans-serif; text-transform:uppercase; letter-spacing:.05em; }
-  .aspect-copilot-card p,.aspect-copilot-card li { color:#475569; font: 700 11px/1.5 system-ui,sans-serif; }
-  .aspect-copilot-card ul { margin: 7px 0 0; padding-left: 18px; }
-  .aspect-copilot-card li + li { margin-top: 4px; }
-  .aspect-copilot-meter { height: 10px; margin: 9px 0 5px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
-  .aspect-copilot-meter > i { display:block; height:100%; border-radius:inherit; background: linear-gradient(90deg,#10b981,#f59e0b 62%,#ef4444); transition: width .3s ease; }
-  .aspect-copilot-chip { display:inline-flex; align-items:center; gap:5px; padding:5px 8px; margin:2px;
-    border-radius:999px; color:#334155; background:#eef4fb; font:800 9px/1 system-ui,sans-serif; }
-  .aspect-copilot-actions { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
-  .aspect-copilot-actions button { border:0; border-radius:12px; padding:10px 12px; cursor:pointer; color:#fff;
-    background:#1e3a8a; font:900 9px/1 system-ui,sans-serif; text-transform:uppercase; }
-  .aspect-copilot-actions button.secondary { color:#1e3a8a; background:#e0e7ff; }
-  .aspect-copilot-actions button.ghost { color:#64748b; background:#eef2f7; }
-  .aspect-copilot-input { width:100%; box-sizing:border-box; resize:vertical; min-height:66px; padding:11px;
-    border:1px solid #dbe5f1; border-radius:14px; outline:0; color:#172033; background:#f8fafc;
-    font:700 11px/1.45 system-ui,sans-serif; }
-  .aspect-copilot-empty { padding:24px 10px; color:#64748b; text-align:center; font:700 11px/1.5 system-ui,sans-serif; }
-  @media (max-width: 520px) {
-    #aspect-copilot-fab { right: 11px; bottom: calc(68px + env(safe-area-inset-bottom)); }
-    .aspect-copilot-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
-    .aspect-copilot-sheet { max-height: 91vh; border-radius: 24px; }
-    .aspect-copilot-head { border-radius:24px 24px 0 0; }
-  }
-</style>
+
+
 <script>
-/* ==========================================================================
-   ASPECT COPILOT v1
-   Работает локально и не делает вид, что эвристики — обученная модель.
-   Слой собирает уже имеющиеся в приложении данные и выдаёт объяснимую
-   оценку риска. Его можно безболезненно заменить серверным AI-gateway.
-   ========================================================================== */
-(function initAspectCopilot() {
-  'use strict';
-  if (document.getElementById('aspect-copilot-fab')) return;
-
-  const esc = (value) => String(value == null ? '' : value)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-  const byId = (id) => document.getElementById(id);
-  const text = (id) => (byId(id) && (byId(id).value || byId(id).textContent || '').trim()) || '';
-  const n = (value) => {
-    const match = String(value == null ? '' : value).replace(',','.').match(/-?\d+(?:\.\d+)?/);
-    return match ? Number(match[0]) : null;
-  };
-  const safeJson = (key, fallback) => {
-    try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch (e) { return fallback; }
-  };
-  const formatNum = (value, digits = 1) => value == null || !isFinite(value) ? '—' : Number(value).toFixed(digits).replace('.',',');
-
-  const state = {
-    tab: 'overview',
-    scan: null,
-    report: null,
-    recipes: null,
-    batches: null,
-    defects: null,
-    passportId: null
-  };
-
-  const PASSPORTS_KEY = 'aspect_batch_passports_v1';
-  let passportCloudSyncTimer = null;
-  let passportCloudSyncRunning = false;
-  let passportCloudSyncAgain = false;
-
-  function passportUpdatedAt(item) {
-    const value = item && (item.updatedAt || item.createdAt);
-    const parsed = value ? Date.parse(value) : 0;
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-
-  // Сливаем паспорта по времени изменения. Лента событий объединяется
-  // отдельно, поэтому события с двух устройств не пропадают.
-  function mergePassportLists(remoteList, localList) {
-    const byId = new Map();
-    const order = [];
-    const add = item => {
-      if (!item || item.id == null) return;
-      const id = String(item.id);
-      if (!byId.has(id)) {
-        byId.set(id, item);
-        order.push(id);
-        return;
-      }
-      const previous = byId.get(id);
-      const winner = passportUpdatedAt(item) >= passportUpdatedAt(previous) ? item : previous;
-      const events = [];
-      const seen = new Set();
-      [...(previous.events || []), ...(item.events || [])].forEach(event => {
-        if (!event) return;
-        const key = [event.at, event.kind, event.note, event.actor, event.outcome].join('|');
-        if (!seen.has(key)) { seen.add(key); events.push(event); }
-      });
-      events.sort((a, b) => (Date.parse(a.at || '') || 0) - (Date.parse(b.at || '') || 0));
-      byId.set(id, Object.assign({}, winner, { events }));
-    };
-    (Array.isArray(remoteList) ? remoteList : []).forEach(add);
-    (Array.isArray(localList) ? localList : []).forEach(add);
-    return order.map(id => byId.get(id)).slice(-100);
-  }
-
-  function queuePassportCloudSync() {
-    const cfg = sheetDbConfig || loadSheetDbConfig();
-    if (!cfg || !cfg.url) return;
-    if (passportCloudSyncRunning) {
-      passportCloudSyncAgain = true;
-      return;
+/* Сеть + проверка модулей + self-check */
+(function () {
+  function setNet() {
+    var el = document.getElementById('header-net-status');
+    if (!el) return;
+    if (navigator.onLine) {
+      el.textContent = '🟢';
+      el.title = 'Сеть есть — синк и gateway возможны';
+    } else {
+      el.textContent = '🔴';
+      el.title = 'Нет сети — работаем только локально';
     }
-    if (passportCloudSyncTimer) clearTimeout(passportCloudSyncTimer);
-    passportCloudSyncTimer = setTimeout(async () => {
-      passportCloudSyncTimer = null;
-      passportCloudSyncRunning = true;
-      try {
-        await syncArrayToCloud('passports', readPassports());
-      } finally {
-        passportCloudSyncRunning = false;
-        if (passportCloudSyncAgain) {
-          passportCloudSyncAgain = false;
-          queuePassportCloudSync();
-        }
-      }
-    }, 250);
   }
+  window.addEventListener('online', setNet);
+  window.addEventListener('offline', setNet);
+  setNet();
 
-  function readDeltaE() {
-    const candidates = ['compare-de-value','compare-de-badge','de-warning-banner','ai-analysis','correction-advice'];
-    const values = candidates.map(id => n(text(id))).filter(v => v != null && v >= 0 && v <= 100);
-    if (values.length) return values[0];
-    const bodyMatch = (document.body.innerText || '').match(/(?:ΔE|dE)\s*[:=]?\s*(\d+(?:[,.]\d+)?)/i);
-    return bodyMatch ? n(bodyMatch[1]) : null;
-  }
-
-  function collectScan() {
-    const dE = readDeltaE();
-    const theo = text('theo-hex');
-    const actual = text('actual-hex');
-    const article = text('article');
-    const line = text('colorist-line');
-    const base = text('base');
-    const baseLot = text('base-lot');
-    const comment = text('recipe-comment');
-    const correctionHistory = safeJson('colorist_correction_history', []);
-    const scans = safeJson('colorist_scan_history', []);
-    const pendingRequests = safeJson('paint_requests_pending_send', []);
-    const visionRoll = n(localStorage.getItem('visionRollMeter'));
-    const hasColorPair = Boolean(theo && actual && theo !== '--' && actual !== '--');
-    let risk = 12;
-    const reasons = [];
-    const actions = [];
-    if (dE == null) { risk += 22; reasons.push('нет свежего подтверждённого ΔE'); actions.push('Снимите эталон и замес при одном источнике света'); }
-    else if (dE > 3.5) { risk += 34; reasons.push('ΔE выше критического порога'); actions.push('Не сдавайте партию — сделайте одну контролируемую коррекцию'); }
-    else if (dE > 1.5) { risk += 20; reasons.push('ΔE выше рабочего допуска'); actions.push('Сверьте ось отклонения ΔL/ΔA/ΔB перед добавлением пигмента'); }
-    else if (dE > 1) { risk += 9; reasons.push('цвет близок к допуску, но требует подтверждения'); actions.push('Повторите замер после высыхания'); }
-    if (!hasColorPair) { risk += 13; reasons.push('не собрана пара фото эталон/замес'); actions.push('Загрузите оба образца — так прогноз будет надёжнее'); }
-    if (!article) { risk += 8; reasons.push('не указан артикул'); actions.push('Укажите артикул, чтобы связать результат с историей'); }
-    if (!line) { risk += 7; reasons.push('не выбрана линия'); actions.push('Выберите линию перед запуском'); }
-    if (!baseLot) { risk += 6; reasons.push('не указан лот основы'); actions.push('Запишите лот основы для контроля стабильности'); }
-    if (correctionHistory.length > 2) { risk += 8; reasons.push('в текущей истории много коррекций'); actions.push('Остановите серию попыток и сравните с лучшим прецедентом'); }
-    if (pendingRequests.length) { risk += 4; reasons.push('есть недоставленные заявки по краске'); actions.push('Проверьте очередь заявок перед стартом'); }
-    if (visionRoll != null && visionRoll > 0) reasons.push('контроль рулона уже идёт с отметки ' + formatNum(visionRoll,0) + ' м');
-    risk = Math.max(0, Math.min(100, Math.round(risk)));
-    const status = risk >= 65 ? { label:'ВЫСОКИЙ', color:'#dc2626' } : risk >= 35 ? { label:'СРЕДНИЙ', color:'#d97706' } : { label:'НИЗКИЙ', color:'#059669' };
-    return {
-      dE, article, line, base, baseLot, comment, theo, actual, hasColorPair,
-      correctionCount: correctionHistory.length, scanCount: scans.length,
-      pendingCount: pendingRequests.length, visionRoll, risk, status, reasons, actions,
-      stamp: new Date().toISOString()
-    };
-  }
-
-  async function enrichScan(scan) {
-    if (typeof getAllLocalRecipes === 'function') {
-      try { state.recipes = await getAllLocalRecipes(); } catch (e) { state.recipes = null; }
-    }
-    if (typeof getAllProductionBatches === 'function') {
-      try { state.batches = await getAllProductionBatches(); } catch (e) { state.batches = null; }
-    }
-    if (typeof getAllVisionDefects === 'function') {
-      try { state.defects = await getAllVisionDefects(); } catch (e) { state.defects = null; }
-    }
-    state.scan = scan;
-    renderCopilot();
-  }
-
-  function scoreDescription(scan) {
-    return scan.risk >= 65 ? 'Перед запуском нужен контроль мастера' :
-      scan.risk >= 35 ? 'Можно продолжать после короткой проверки' : 'Состояние выглядит стабильным';
-  }
-
-  function stat(label, value) {
-    return '<div class="aspect-copilot-stat"><small>' + esc(label) + '</small><strong>' + esc(value) + '</strong></div>';
-  }
-
-  function overviewHtml(scan) {
-    const recipes = state.recipes ? state.recipes.length : '—';
-    const batches = state.batches ? state.batches.length : '—';
-    const defects = state.defects ? state.defects.length : '—';
-    return '<div class="aspect-copilot-grid">' +
-      stat('Риск запуска', scan.risk + '/100') + stat('ΔE сейчас', formatNum(scan.dE,2)) +
-      stat('Рецептов в памяти', recipes) + stat('Дефектов CV', defects) + '</div>' +
-      '<div class="aspect-copilot-card">' +
-        '<h4>🤖 Вердикт Copilot · ' + esc(scoreDescription(scan)) + '</h4>' +
-        '<div class="aspect-copilot-meter"><i style="width:' + scan.risk + '%"></i></div>' +
-        '<p><b style="color:' + scan.status.color + '">' + esc(scan.status.label) + '</b> · оценка объяснимая и локальная, без отправки фото или рецепта в облако.</p>' +
-        '<div>' +
-          '<span class="aspect-copilot-chip">Артикул: ' + esc(scan.article || 'не указан') + '</span>' +
-          '<span class="aspect-copilot-chip">Линия: ' + esc(scan.line || 'не выбрана') + '</span>' +
-          '<span class="aspect-copilot-chip">Основа: ' + esc(scan.base || '—') + '</span>' +
-          (scan.baseLot ? '<span class="aspect-copilot-chip">Лот: ' + esc(scan.baseLot) + '</span>' : '') +
-        '</div>' +
-      '</div>' +
-      '<div class="aspect-copilot-card"><h4>Почему такой риск</h4><ul>' +
-        (scan.reasons.length ? scan.reasons.map(item => '<li>• ' + esc(item) + '</li>').join('') : '<li>• Критичных сигналов не найдено</li>') +
-      '</ul></div>' +
-      '<div class="aspect-copilot-card"><h4>Что сделать сейчас</h4><ul>' +
-        (scan.actions.length ? scan.actions.slice(0,4).map(item => '<li>→ ' + esc(item) + '</li>').join('') : '<li>→ Можно переходить к сдаче партии по чек-листу</li>') +
-      '</ul></div>' +
-      '<div class="aspect-copilot-actions">' +
-        '<button onclick="aspectCopilotSetTab(\'risk\')">Проверить риск</button>' +
-        '<button class="secondary" onclick="aspectCopilotSetTab(\'knowledge\')">Карта знаний</button>' +
-        '<button class="secondary" onclick="aspectCopilotSetTab(\'handover\')">Передача смены</button>' +
-        '<button class="ghost" onclick="aspectCopilotSaveReport()">Сохранить снимок</button>' +
-      '</div>';
-  }
-
-  function riskHtml(scan) {
-    const matrix = [
-      ['Цветовой допуск', scan.dE == null ? 'Нет замера' : 'ΔE ' + formatNum(scan.dE,2), scan.dE == null ? 'critical' : scan.dE > 3.5 ? 'critical' : scan.dE > 1.5 ? 'warn' : 'ok'],
-      ['Идентификация', scan.article && scan.line ? 'Артикул и линия указаны' : 'Нужно заполнить артикул/линию', scan.article && scan.line ? 'ok' : 'warn'],
-      ['Трассируемость', scan.baseLot ? 'Лот основы записан' : 'Лот основы не записан', scan.baseLot ? 'ok' : 'warn'],
-      ['Контроль изображения', scan.hasColorPair ? 'Эталон и замес доступны' : 'Нужны оба образца', scan.hasColorPair ? 'ok' : 'warn'],
-      ['Повторные попытки', scan.correctionCount > 2 ? scan.correctionCount + ' записей коррекции' : 'в норме', scan.correctionCount > 2 ? 'warn' : 'ok']
+  /** В консоли: aspectModulesSelfCheck() */
+  function aspectModulesSelfCheck() {
+    var checks = [
+      { name: 'cloud: loadSheetDbConfig', ok: typeof loadSheetDbConfig === 'function' },
+      { name: 'cloud: fetchCloudSnapshot', ok: typeof fetchCloudSnapshot === 'function' },
+      { name: 'cloud: pushCloudSnapshot', ok: typeof pushCloudSnapshot === 'function' },
+      { name: 'cloud: pushCloudSnapshotWithRetry', ok: typeof pushCloudSnapshotWithRetry === 'function' },
+      { name: 'cloud: postToCloudWithRetry', ok: typeof postToCloudWithRetry === 'function' },
+      { name: 'cloud: mergeArrayForCloudPush', ok: typeof mergeArrayForCloudPush === 'function' },
+      { name: 'cloud: pinFreshLocalFields', ok: typeof pinFreshLocalFields === 'function' },
+      { name: 'cloud: syncArrayToCloud', ok: typeof syncArrayToCloud === 'function' },
+      { name: 'cloud: syncLineRunsToCloud', ok: typeof syncLineRunsToCloud === 'function' },
+      { name: 'vision: loadCvModel_', ok: typeof loadCvModel_ === 'function' },
+      { name: 'vision: computeDefectEmbedding_', ok: typeof computeDefectEmbedding_ === 'function' },
+      { name: 'vision: cosineSimilarity_', ok: typeof cosineSimilarity_ === 'function' },
+      { name: 'copilot: FAB', ok: !!document.getElementById('aspect-copilot-fab') },
+      { name: 'copilot: selfTest fn', ok: typeof aspectCopilotSelfTest === 'function' }
     ];
-    const icon = type => type === 'ok' ? '🟢' : type === 'warn' ? '🟡' : '🔴';
-    return '<div class="aspect-copilot-card"><h4>🔮 Предстартовый контроль</h4>' +
-      '<p>Система проверяет не только цвет, но и готовность данных для расследования, если партия уйдёт в брак.</p>' +
-      '<div style="display:grid;gap:7px">' + matrix.map(row => '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid #edf2f7;font:800 10px/1.3 system-ui,sans-serif"><span>' + icon(row[2]) + ' ' + esc(row[0]) + '</span><span style="color:#64748b;text-align:right">' + esc(row[1]) + '</span></div>').join('') + '</div>' +
-      '</div>' +
-      '<div class="aspect-copilot-card"><h4>Рекомендуемая последовательность</h4><ol style="margin:0;padding-left:19px">' +
-      scan.actions.slice(0,5).map(item => '<li style="margin:6px 0;color:#475569;font:700 11px/1.45 system-ui,sans-serif">' + esc(item) + '</li>').join('') +
-      '</ol></div>' +
-      '<div class="aspect-copilot-actions"><button onclick="aspectCopilotGo(\'vision\')">Открыть контроль брака</button><button class="secondary" onclick="aspectCopilotGo(\'production\')">Открыть производство</button></div>';
-  }
-
-  function correctionHtml(scan) {
-    const axis = scan.dE == null ? 'нет данных по ΔE' : scan.dE > 3.5 ? 'сначала повторный замер и проверка образцов' : scan.dE > 1.5 ? 'проверить ΔL / ΔA / ΔB и сделать одну малую коррекцию' : 'не менять рецепт без повторной проверки после высыхания';
-    const history = safeJson('colorist_correction_history', []);
-    return '<div class="aspect-copilot-card"><h4>🧪 Безопасная коррекция</h4><p>Рекомендация: <b>' + esc(axis) + '</b>. Copilot не меняет навеску автоматически — каждое изменение должно быть видно и подтверждено колористом.</p>' +
-      '<textarea id="aspect-copilot-correction-note" class="aspect-copilot-input" placeholder="Например: уменьшить жёлтый на 0,3 г, добавить 0,7 г циана после проверки оси ΔB"></textarea>' +
-      '<div class="aspect-copilot-actions"><button onclick="aspectCopilotSaveCorrection()">Сохранить рекомендацию</button><button class="secondary" onclick="aspectCopilotGo(\'colorist\')">Вернуться в рецепт</button></div></div>' +
-      '<div class="aspect-copilot-card"><h4>Последние коррекции · ' + history.length + '</h4>' +
-      (history.length ? '<ul>' + history.slice(-4).reverse().map(item => '<li>• ' + esc(typeof item === 'string' ? item : (item.text || item.reason || JSON.stringify(item))) + '</li>').join('') + '</ul>' : '<p>История коррекций пока пуста.</p>') + '</div>';
-  }
-
-  function handoverHtml(scan) {
-    const report = [
-      'ПЕРЕДАЧА СМЕНЫ · ' + new Date().toLocaleString('ru-RU'),
-      'Артикул: ' + (scan.article || 'не указан') + ' · Линия: ' + (scan.line || 'не выбрана'),
-      'Основа: ' + (scan.base || '—') + (scan.baseLot ? ' · лот ' + scan.baseLot : ''),
-      'ΔE: ' + formatNum(scan.dE,2) + ' · риск запуска: ' + scan.risk + '/100 (' + scan.status.label + ')',
-      '',
-      'ОБЯЗАТЕЛЬНО ПРОВЕРИТЬ:',
-      ...(scan.actions.length ? scan.actions.map((item, i) => (i + 1) + '. ' + item) : ['1. Критичных незавершённых действий не найдено']),
-      '',
-      'Контекст: ' + (scan.comment || 'комментарий к рецепту не добавлен')
-    ].join('\\n');
-    state.report = report;
-    return '<div class="aspect-copilot-card"><h4>📤 Готовая передача смены</h4><textarea id="aspect-copilot-handover" class="aspect-copilot-input" style="min-height:220px">' + esc(report) + '</textarea>' +
-      '<div class="aspect-copilot-actions"><button onclick="aspectCopilotCopyHandover()">Скопировать</button><button class="secondary" onclick="aspectCopilotSaveHandover()">Сохранить в журнал</button><button class="ghost" onclick="aspectCopilotGo(\'dashboard\')">Открыть панель</button></div></div>' +
-      '<div class="aspect-copilot-card"><h4>Данные для контекста</h4>' +
-        '<span class="aspect-copilot-chip">Рецептов: ' + esc(state.recipes ? state.recipes.length : '—') + '</span>' +
-        '<span class="aspect-copilot-chip">Партий: ' + esc(state.batches ? state.batches.length : '—') + '</span>' +
-        '<span class="aspect-copilot-chip">Дефектов CV: ' + esc(state.defects ? state.defects.length : '—') + '</span>' +
-        '<span class="aspect-copilot-chip">Недоставленных заявок: ' + esc(scan.pendingCount) + '</span></div>';
-  }
-
-  function readPassports() {
-    const list = safeJson(PASSPORTS_KEY, []);
-    return Array.isArray(list) ? list : [];
-  }
-
-  function writePassports(list, options) {
-    const safeList = (Array.isArray(list) ? list : []).slice(-100);
-    try { localStorage.setItem(PASSPORTS_KEY, JSON.stringify(safeList)); } catch (e) {}
-    if (!options || !options.skipCloud) queuePassportCloudSync();
-  }
-
-  function passportSnapshot(scan) {
-    return {
-      article: scan.article || '',
-      line: scan.line || '',
-      base: scan.base || '',
-      baseLot: scan.baseLot || '',
-      dE: scan.dE,
-      theo: scan.theo || '',
-      actual: scan.actual || '',
-      hasColorPair: Boolean(scan.hasColorPair),
-      risk: scan.risk,
-      riskLabel: scan.status && scan.status.label ? scan.status.label : '',
-      comment: scan.comment || ''
+    var failed = checks.filter(function (c) { return !c.ok; });
+    var report = {
+      ok: failed.length === 0,
+      total: checks.length,
+      passed: checks.length - failed.length,
+      failed: failed.map(function (c) { return c.name; }),
+      checks: checks
     };
+    if (report.ok) console.log('[aspect] modules OK', report.passed + '/' + report.total);
+    else console.warn('[aspect] modules incomplete', report);
+    return report;
   }
+  window.aspectModulesSelfCheck = aspectModulesSelfCheck;
 
-  function passportAutoStatus(scan) {
-    if (scan.dE != null && scan.dE > 1.5) return { label:'НУЖНА КОРРЕКЦИЯ', color:'#dc2626' };
-    if (scan.risk >= 65) return { label:'НУЖНА КОРРЕКЦИЯ', color:'#dc2626' };
-    if (scan.dE != null && scan.dE <= 1.5 && scan.article && scan.line && scan.baseLot && scan.hasColorPair) {
-      return { label:'ГОТОВА', color:'#059669' };
-    }
-    return { label:'НА ПРОВЕРКЕ', color:'#d97706' };
-  }
-
-  function passportStatusColor(status) {
-    return status === 'ГОТОВА' ? '#059669' : status === 'НУЖНА КОРРЕКЦИЯ' ? '#dc2626' : '#d97706';
-  }
-
-  function passportActor() {
-    try {
-      if (typeof currentUserProfile !== 'undefined' && currentUserProfile && currentUserProfile.name) return currentUserProfile.name;
-    } catch (e) {}
-    return localStorage.getItem('aspect_passport_actor') || '';
-  }
-
-  function passportStageMeta(stage) {
-    if (stage === 'review') return { label:'НА ПРОВЕРКЕ', color:'#2563eb' };
-    if (stage === 'closed') return { label:'ЗАКРЫТА', color:'#475569' };
-    return { label:'В РАБОТЕ', color:'#d97706' };
-  }
-
-  function passportIdArg(value) {
-    return String(value || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-  }
-
-  function currentPassport(scan) {
-    const list = readPassports();
-    if (state.passportId) {
-      const selected = list.find(item => item.id === state.passportId);
-      if (selected) return selected;
-    }
-    return list.find(item => {
-      const fields = item.fields || {};
-      return scan.article && fields.article === scan.article && scan.line && fields.line === scan.line &&
-        (!scan.baseLot || fields.baseLot === scan.baseLot);
-    }) || null;
-  }
-
-  function passportListHtml(list, active) {
-    if (!list.length) return '<div class="aspect-copilot-empty">Паспортов пока нет. Создайте первый из текущего контекста.</div>';
-    return list.slice().reverse().slice(0,8).map(item => {
-      const fields = item.fields || {};
-      const selected = active && active.id === item.id;
-      return '<button onclick="aspectCopilotOpenPassport(\'' + esc(passportIdArg(item.id)) + '\')" style="display:block;width:100%;text-align:left;border:1px solid ' + (selected ? '#a5b4fc' : '#e4ebf5') + ';border-radius:14px;padding:10px;margin-top:7px;background:' + (selected ? '#eef2ff' : '#fff') + ';cursor:pointer">' +
-        '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b style="font:900 10px/1.2 system-ui,sans-serif;color:#172033">' + esc(item.id) + '</b><span style="font:900 8px/1;color:' + passportStatusColor(item.status) + '">' + esc(item.status || 'НА ПРОВЕРКЕ') + '</span></div>' +
-        '<div style="margin-top:5px;color:#64748b;font:700 9px/1.35 system-ui,sans-serif">' + esc([fields.article, fields.line && 'линия ' + fields.line, fields.baseLot && 'лот ' + fields.baseLot].filter(Boolean).join(' · ') || 'Контекст ещё не заполнен') + '</div></button>';
-    }).join('');
-  }
-
-  function passportHtml(scan) {
-    const list = readPassports();
-    const active = currentPassport(scan);
-    if (active && !state.passportId) state.passportId = active.id;
-    const fields = active ? (active.fields || {}) : {};
-    const events = active && Array.isArray(active.events) ? active.events : [];
-    const autoStatus = passportAutoStatus(scan);
-    const status = active ? (active.status || 'НА ПРОВЕРКЕ') : autoStatus.label;
-    const stage = active ? (active.stage || 'work') : 'work';
-    const stageMeta = passportStageMeta(stage);
-    const locked = stage === 'closed';
-    const activeActor = active && (active.closedBy || active.reviewedBy) ? (active.closedBy || active.reviewedBy) : passportActor();
-    const workflowCard = locked
-      ? '<div class="aspect-copilot-card" style="background:#f1f5f9;border-color:#cbd5e1"><h4>🔒 Партия закрыта</h4><p>Изменения заблокированы. Ответственный: <b>' + esc(active.closedBy || active.reviewedBy || 'не указан') + '</b>' + (active.closedAt ? ' · ' + esc(new Date(active.closedAt).toLocaleString('ru-RU')) : '') + '</p><div class="aspect-copilot-actions"><button class="ghost" onclick="aspectCopilotReopenPassport()">Открыть для продолжения</button></div></div>'
-      : '<div class="aspect-copilot-card"><h4>✅ Контроль закрытия</h4><p>Передайте паспорт ответственному на проверку. После закрытия редактирование и новые события будут заблокированы.</p><input id="aspect-passport-responsible" class="aspect-copilot-input" style="min-height:0" value="' + esc(activeActor) + '" placeholder="Кто проверяет партию">' + (stage === 'review' ? '<select id="aspect-passport-final-status" class="aspect-copilot-input" style="margin-top:7px;min-height:0"><option value="auto">Итог по данным (' + esc(autoStatus.label) + ')</option><option>ГОТОВА</option><option>НУЖНА КОРРЕКЦИЯ</option></select>' : '') + '<div class="aspect-copilot-actions"><button class="secondary" onclick="aspectCopilotSubmitPassport()">Передать на проверку</button>' + (stage === 'review' ? '<button onclick="aspectCopilotClosePassport()">Закрыть партию</button>' : '') + '</div></div>';
-    const activeCard = active
-      ? '<div class="aspect-copilot-grid">' +
-          stat('Этап', stageMeta.label) + stat('Итог', status) +
-          stat('ΔE сейчас', formatNum(fields.dE,2)) + stat('Риск', (fields.risk == null ? '—' : fields.risk + '/100')) +
-        '</div>' +
-        '<div class="aspect-copilot-card" style="border-color:' + passportStatusColor(status) + ';border-width:2px">' +
-          '<div style="display:flex;justify-content:space-between;gap:10px;align-items:start"><div><h4>📋 ' + esc(active.id) + '</h4><p style="margin:0">Создан: ' + esc(new Date(active.createdAt).toLocaleString('ru-RU')) + (active.order ? ' · Заказ: ' + esc(active.order) : '') + '</p></div><div style="text-align:right"><b style="display:block;color:' + stageMeta.color + ';font:900 9px/1.2 system-ui,sans-serif">' + esc(stageMeta.label) + '</b><b style="display:block;margin-top:4px;color:' + passportStatusColor(status) + ';font:900 9px/1.2 system-ui,sans-serif">' + esc(status) + '</b></div></div>' +
-          '<div style="margin-top:9px"><span class="aspect-copilot-chip">Артикул: ' + esc(fields.article || '—') + '</span><span class="aspect-copilot-chip">Линия: ' + esc(fields.line || '—') + '</span><span class="aspect-copilot-chip">Лот: ' + esc(fields.baseLot || '—') + '</span><span class="aspect-copilot-chip">Основа: ' + esc(fields.base || '—') + '</span></div>' +
-        '</div>' +
-        workflowCard +
-        (locked ? '' : '<div class="aspect-copilot-card"><h4>Добавить событие</h4>' +
-          '<div style="display:grid;grid-template-columns:minmax(120px,170px) 1fr;gap:7px">' +
-            '<select id="aspect-passport-event-kind" class="aspect-copilot-input" style="min-height:0"><option>Замер ΔE</option><option>Коррекция</option><option>Дефект</option><option>Проверка</option><option>Передача смены</option><option>Комментарий</option></select>' +
-            '<select id="aspect-passport-status" class="aspect-copilot-input" style="min-height:0"><option value="auto">Статус по данным (' + esc(autoStatus.label) + ')</option><option>НА ПРОВЕРКЕ</option><option>НУЖНА КОРРЕКЦИЯ</option><option>ГОТОВА</option></select>' +
-          '</div>' +
-          '<textarea id="aspect-passport-event-note" class="aspect-copilot-input" style="margin-top:7px;min-height:58px" placeholder="Что произошло? Например: повторный замер после высыхания, ΔE снизилась до 0,8"></textarea>' +
-          '<div class="aspect-copilot-actions"><button onclick="aspectCopilotAddPassportEvent()">Добавить событие</button><button class="secondary" onclick="aspectCopilotUpdatePassport()">Обновить из текущего состояния</button><button class="ghost" onclick="aspectCopilotNewPassport()">Новый паспорт</button></div>' +
-        '</div>') +
-        '<div class="aspect-copilot-card"><h4>Лента партии</h4>' +
-          (events.length ? events.slice().reverse().map(event => '<div style="padding:9px 0;border-bottom:1px solid #edf2f7"><div style="display:flex;justify-content:space-between;gap:8px"><b style="font:900 10px/1.3 system-ui,sans-serif;color:#172033">' + esc(event.kind || 'Событие') + '</b><span style="color:#94a3b8;font:700 9px/1.3 system-ui,sans-serif">' + esc(new Date(event.at).toLocaleString('ru-RU')) + '</span></div><p style="margin:4px 0 0">' + esc(event.note || 'Состояние партии зафиксировано') + '</p>' + (event.snapshot && event.snapshot.dE != null ? '<span class="aspect-copilot-chip">ΔE ' + esc(formatNum(event.snapshot.dE,2)) + '</span>' : '') + (event.snapshot && event.snapshot.risk != null ? '<span class="aspect-copilot-chip">риск ' + esc(event.snapshot.risk + '/100') + '</span>' : '') + '</div>').join('') : '<div class="aspect-copilot-empty">Событий пока нет.</div>') +
-        '</div>'
-      : '<div class="aspect-copilot-card"><h4>Создать паспорт из текущего контекста</h4><p>В паспорт попадут текущие артикул, линия, лот основы, ΔE, риск запуска и комментарий. После этого каждое изменение можно фиксировать в ленте.</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:7px"><input id="aspect-passport-id" class="aspect-copilot-input" style="min-height:0" placeholder="Номер партии (например П-1042)"><input id="aspect-passport-order" class="aspect-copilot-input" style="min-height:0" placeholder="Заказ или клиент"></div><div class="aspect-copilot-actions"><button onclick="aspectCopilotCreatePassport()">Создать паспорт</button></div></div>';
-    return '<div class="aspect-copilot-card"><h4>🧾 Электронный паспорт партии</h4><p>Одна карточка связывает партию с артикулом, линией, лотом, измерениями и всеми решениями смены. Данные сохраняются на устройстве и синхронизируются с общей базой Apps Script.</p></div>' +
-      activeCard +
-      '<div class="aspect-copilot-card"><h4>Последние паспорта · ' + list.length + '</h4>' + passportListHtml(list, active) + '</div>';
-  }
-
-  function createPassport() {
-    const scan = state.scan || collectScan();
-    const id = text('aspect-passport-id') || ('П-' + new Date().toISOString().slice(0,16).replace(/[^\d]/g,''));
-    const list = readPassports();
-    if (list.some(item => item.id === id)) {
-      state.passportId = id;
-      renderCopilot();
-      if (typeof toast === 'function') toast('Паспорт с таким номером уже открыт');
-      return;
-    }
-    const now = new Date().toISOString();
-    const status = passportAutoStatus(scan);
-    list.push({
-      id,
-      order: text('aspect-passport-order'),
-      status: status.label,
-      stage: 'work',
-      createdAt: now,
-      updatedAt: now,
-      fields: passportSnapshot(scan),
-      events: [{ kind:'Создание паспорта', note:'Паспорт создан из текущего состояния приложения', at:now, snapshot:passportSnapshot(scan) }]
-    });
-    writePassports(list);
-    state.passportId = id;
-    renderCopilot();
-    if (typeof toast === 'function') toast('Паспорт партии создан');
-  }
-
-  function updatePassport() {
-    const scan = state.scan || collectScan();
-    const list = readPassports();
-    const passport = list.find(item => item.id === state.passportId);
-    if (!passport) return;
-    if (passport.stage === 'closed') {
-      if (typeof toast === 'function') toast('Партия закрыта — сначала откройте её для продолжения');
-      return;
-    }
-    const now = new Date().toISOString();
-    const selectedStatus = text('aspect-passport-status');
-    const status = selectedStatus && selectedStatus !== 'auto' ? selectedStatus : passportAutoStatus(scan).label;
-    passport.status = status;
-    passport.updatedAt = now;
-    passport.fields = passportSnapshot(scan);
-    passport.events = Array.isArray(passport.events) ? passport.events : [];
-    passport.events.push({ kind:'Обновление из приложения', note:'Зафиксированы текущие данные партии', at:now, snapshot:passportSnapshot(scan) });
-    writePassports(list);
-    renderCopilot();
-    if (typeof toast === 'function') toast('Паспорт обновлён');
-  }
-
-  function addPassportEvent() {
-    const list = readPassports();
-    const passport = list.find(item => item.id === state.passportId);
-    if (!passport) return;
-    if (passport.stage === 'closed') {
-      if (typeof toast === 'function') toast('Партия закрыта — сначала откройте её для продолжения');
-      return;
-    }
-    const note = text('aspect-passport-event-note');
-    if (!note) {
-      if (typeof toast === 'function') toast('Добавьте короткое описание события');
-      return;
-    }
-    const scan = state.scan || collectScan();
-    const selectedStatus = text('aspect-passport-status');
-    const now = new Date().toISOString();
-    passport.status = selectedStatus && selectedStatus !== 'auto' ? selectedStatus : passportAutoStatus(scan).label;
-    passport.updatedAt = now;
-    passport.fields = passportSnapshot(scan);
-    passport.events = Array.isArray(passport.events) ? passport.events : [];
-    passport.events.push({ kind:text('aspect-passport-event-kind') || 'Событие', note, at:now, snapshot:passportSnapshot(scan) });
-    writePassports(list);
-    renderCopilot();
-    if (typeof toast === 'function') toast('Событие добавлено в паспорт');
-  }
-
-  function submitPassport() {
-    const list = readPassports();
-    const passport = list.find(item => item.id === state.passportId);
-    if (!passport || passport.stage === 'closed') return;
-    const actor = text('aspect-passport-responsible') || passportActor();
-    if (!actor) {
-      if (typeof toast === 'function') toast('Укажите имя ответственного');
-      return;
-    }
-    const now = new Date().toISOString();
-    passport.stage = 'review';
-    passport.reviewedBy = actor;
-    passport.submittedAt = now;
-    passport.updatedAt = now;
-    passport.events = Array.isArray(passport.events) ? passport.events : [];
-    passport.events.push({ kind:'Передача на проверку', note:'Паспорт передан ответственному: ' + actor, at:now, actor });
-    try { localStorage.setItem('aspect_passport_actor', actor); } catch (e) {}
-    writePassports(list);
-    renderCopilot();
-    if (typeof toast === 'function') toast('Партия передана на проверку');
-  }
-
-  function closePassport() {
-    const list = readPassports();
-    const passport = list.find(item => item.id === state.passportId);
-    if (!passport || passport.stage === 'closed') return;
-    if (passport.stage !== 'review') {
-      if (typeof toast === 'function') toast('Сначала передайте партию на проверку');
-      return;
-    }
-    const actor = text('aspect-passport-responsible') || passport.reviewedBy || passportActor();
-    if (!actor) {
-      if (typeof toast === 'function') toast('Укажите имя ответственного');
-      return;
-    }
-    const now = new Date().toISOString();
-    const selectedOutcome = text('aspect-passport-final-status');
-    const outcome = selectedOutcome && selectedOutcome !== 'auto' ? selectedOutcome : passportAutoStatus(state.scan || collectScan()).label === 'ГОТОВА' ? 'ГОТОВА' : 'НУЖНА КОРРЕКЦИЯ';
-    passport.stage = 'closed';
-    passport.status = outcome;
-    passport.closedBy = actor;
-    passport.closedAt = now;
-    passport.updatedAt = now;
-    passport.events = Array.isArray(passport.events) ? passport.events : [];
-    passport.events.push({ kind:'Партия закрыта', note:'Итог: ' + outcome + '. Ответственный: ' + actor, at:now, actor, outcome });
-    try { localStorage.setItem('aspect_passport_actor', actor); } catch (e) {}
-    writePassports(list);
-    renderCopilot();
-    if (typeof toast === 'function') toast('Партия закрыта: ' + outcome);
-  }
-
-  function reopenPassport() {
-    const list = readPassports();
-    const passport = list.find(item => item.id === state.passportId);
-    if (!passport) return;
-    const actor = passportActor() || passport.closedBy || '';
-    const now = new Date().toISOString();
-    passport.stage = 'work';
-    passport.reopenedAt = now;
-    passport.updatedAt = now;
-    passport.events = Array.isArray(passport.events) ? passport.events : [];
-    passport.events.push({ kind:'Партия открыта повторно', note:'Редактирование возобновлено' + (actor ? ' · ' + actor : ''), at:now, actor });
-    writePassports(list);
-    renderCopilot();
-    if (typeof toast === 'function') toast('Паспорт снова открыт для работы');
-  }
-
-  function openPassport(id) { state.passportId = id; state.tab = 'passport'; renderCopilot(); }
-  function newPassport() { state.passportId = null; state.tab = 'passport'; renderCopilot(); }
-
-  function buildKnowledgeGraph(scan) {
-    const rows = [];
-    const addRows = (items, source) => (Array.isArray(items) ? items : []).forEach(item => {
-      if (!item || typeof item !== 'object') return;
-      const article = item.article || item.art || item.articleNumber || item.name || '';
-      const line = item.line || item.lineNum || item.lineNumber || '';
-      const lot = item.baseLot || item.base_lot || item.lot || item.lotBase || '';
-      const dE = n(item.dE ?? item.de ?? item.deltaE ?? item.delta_e ?? item.delta);
-      const defect = item.defect || item.defectType || item.tag || item.type || item.kind || '';
-      rows.push({ source, article:String(article || '').trim(), line:String(line || '').trim(), lot:String(lot || '').trim(), dE, defect:String(defect || '').trim() });
-    });
-    addRows(state.recipes, 'рецепт');
-    addRows(state.batches, 'партия');
-    addRows(state.defects, 'CV');
-    safeJson('aspect_copilot_corrections', []).forEach(item => addRows([{
-      article:item.article, line:item.line, defect:'коррекция'
-    }], 'коррекция'));
-
-    const countBy = key => {
-      const map = new Map();
-      rows.forEach(row => { const value = row[key]; if (value) map.set(value, (map.get(value) || 0) + 1); });
-      return [...map.entries()].sort((a,b) => b[1] - a[1]);
-    };
-    const links = [];
-    rows.forEach(row => {
-      if (row.article && row.line) links.push({ left:row.article, right:'линия ' + row.line, kind:'работает на' });
-      if (row.article && row.lot) links.push({ left:row.article, right:'лот ' + row.lot, kind:'использует' });
-      if (row.line && row.defect) links.push({ left:'линия ' + row.line, right:row.defect, kind:'сигнал' });
-    });
-    const linkCount = new Map();
-    links.forEach(link => {
-      const key = link.left + '|' + link.kind + '|' + link.right;
-      linkCount.set(key, { ...link, count:(linkCount.get(key)?.count || 0) + 1 });
-    });
-    const query = String(state.knowledgeQuery || '').trim().toLowerCase();
-    const filtered = query ? rows.filter(row => [row.article,row.line,row.lot,row.defect].join(' ').toLowerCase().includes(query)) : rows;
-    const current = rows.filter(row => scan.article && row.article && row.article.toLowerCase() === scan.article.toLowerCase());
-    const deRows = rows.map(row => row.dE).filter(value => value != null && isFinite(value));
-    const averageDE = deRows.length ? deRows.reduce((sum,value) => sum + value, 0) / deRows.length : null;
-    const suspiciousLots = countBy('lot').filter(item => item[1] >= 2).slice(0,5);
-    const recurringDefects = countBy('defect').filter(item => item[1] >= 2).slice(0,5);
-    const lineSignals = countBy('line').filter(item => item[1] >= 2).slice(0,5);
-    const topLinks = [...linkCount.values()].sort((a,b) => b.count - a.count).slice(0,8);
-    return { rows, filtered, current, averageDE, suspiciousLots, recurringDefects, lineSignals, topLinks, nodeCount: new Set(rows.flatMap(row => [row.article,row.line,row.lot,row.defect].filter(Boolean))).size, linkCount: links.length };
-  }
-
-  function inferRootCauses(scan, graph) {
-    const hypotheses = [];
-    const currentLot = String(scan.baseLot || '').toLowerCase();
-    const currentLine = String(scan.line || '').toLowerCase();
-    const currentArticle = String(scan.article || '').toLowerCase();
-    const lotHit = graph.suspiciousLots.find(item => currentLot && String(item[0]).toLowerCase() === currentLot);
-    const lineHit = graph.lineSignals.find(item => currentLine && String(item[0]).toLowerCase() === currentLine);
-    const articleRows = graph.rows.filter(row => currentArticle && row.article.toLowerCase() === currentArticle);
-    const articleHighDE = articleRows.filter(row => row.dE != null && row.dE > 1.5).length;
-    const defectHit = graph.recurringDefects[0];
-
-    if (lotHit) hypotheses.push({
-      title:'Дрейф лота сырья', confidence:Math.min(96, 62 + lotHit[1] * 7),
-      evidence:'Лот «' + lotHit[0] + '» встречается в истории ' + lotHit[1] + ' раз и совпадает с текущим лотом.',
-      action:'Сделать контрольный замес на другом лоте или снизить дозировку после подтверждения силы.'
-    });
-    if (lineHit) hypotheses.push({
-      title:'Паттерн конкретной линии', confidence:Math.min(92, 56 + lineHit[1] * 6),
-      evidence:'По линии «' + lineHit[0] + '» накоплено ' + lineHit[1] + ' связанных записей.',
-      action:'Проверить секцию печати, ракель и скорость; сравнить с лучшей линией для этого артикула.'
-    });
-    if (defectHit) hypotheses.push({
-      title:'Повторяющийся тип дефекта', confidence:Math.min(90, 52 + defectHit[1] * 8),
-      evidence:'Сигнал «' + defectHit[0] + '» повторяется ' + defectHit[1] + ' раз в доступной истории.',
-      action:'Открыть карту рулона и сопоставить период дефекта с валом, клише или секцией линии.'
-    });
-    if (articleHighDE >= 2 || scan.correctionCount > 2) hypotheses.push({
-      title:'Нестабильность рецепта', confidence:Math.min(88, 58 + articleHighDE * 6 + scan.correctionCount * 3),
-      evidence:'Для текущего артикула найдено ' + articleHighDE + ' замеров выше ΔE 1.5; коррекций в памяти: ' + scan.correctionCount + '.',
-      action:'Выбрать лучший подтверждённый прецедент, не продолжать цепочку мелких коррекций.'
-    });
-    if (!scan.baseLot || scan.dE == null || !scan.hasColorPair) hypotheses.push({
-      title:'Недостаток измерительных данных', confidence:68,
-      evidence:'Не хватает ' + [!scan.baseLot && 'лота основы', scan.dE == null && 'ΔE', !scan.hasColorPair && 'пары образцов'].filter(Boolean).join(', ') + '.',
-      action:'Сначала заполнить трассировку и повторить замер — иначе любая причина будет слабой гипотезой.'
-    });
-    if (!hypotheses.length) hypotheses.push({
-      title:'Причина пока не подтверждена', confidence:28,
-      evidence:'В локальной истории недостаточно повторов, чтобы честно ранжировать гипотезы.',
-      action:'Сохранить следующий замес с лотом, линией, фото и ΔE.'
-    });
-    return hypotheses.sort((a,b) => b.confidence - a.confidence).slice(0,4);
-  }
-
-  function rootCauseHtml(scan, graph) {
-    const causes = inferRootCauses(scan, graph);
-    return '<div class="aspect-copilot-card"><h4>🧠 Вероятные первопричины</h4><p>Ранжирование построено по повторяемым локальным сигналам, а не по одному неудачному замесу. Процент — уверенность гипотезы, не доказательство.</p>' +
-      causes.map((cause, index) => '<div style="padding:10px 0;border-bottom:1px solid #edf2f7"><div style="display:flex;justify-content:space-between;gap:8px;font:900 11px/1.3 system-ui,sans-serif"><span>' + (index + 1) + '. ' + esc(cause.title) + '</span><b style="color:' + (cause.confidence >= 70 ? '#dc2626' : cause.confidence >= 45 ? '#d97706' : '#64748b') + '">' + cause.confidence + '%</b></div><div class="aspect-copilot-meter" style="height:6px"><i style="width:' + cause.confidence + '%"></i></div><p style="margin:5px 0 0">Доказательство: ' + esc(cause.evidence) + '</p><p style="margin:4px 0 0;color:#1e3a8a">→ Действие: ' + esc(cause.action) + '</p></div>').join('') +
-      '</div>';
-  }
-
-  function knowledgeHtml(scan) {
-    const graph = buildKnowledgeGraph(scan);
-    const list = (items, empty) => items.length ? '<ul>' + items.map(item => '<li>• ' + esc(item[0]) + ' <b style="color:#3730a3">×' + item[1] + '</b></li>').join('') + '</ul>' : '<p>' + esc(empty) + '</p>';
-    const links = graph.topLinks.length ? graph.topLinks.map(link => '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:7px 0;border-bottom:1px solid #edf2f7;font:800 10px/1.3 system-ui,sans-serif"><span class="aspect-copilot-chip">' + esc(link.left) + '</span><span style="color:#94a3b8">→ ' + esc(link.kind) + ' →</span><span class="aspect-copilot-chip">' + esc(link.right) + '</span><b style="color:#3730a3">×' + link.count + '</b></div>').join('') : '<p>Связей пока недостаточно. Сохраните несколько рецептов или партий.</p>';
-    const matchNote = state.knowledgeQuery ? 'Найдено записей: ' + graph.filtered.length : 'Все доступные локальные записи';
-    return '<div class="aspect-copilot-grid">' +
-      stat('Узлов памяти', graph.nodeCount) + stat('Связей', graph.linkCount) +
-      stat('Средний ΔE', formatNum(graph.averageDE,2)) + stat('По артикулу', graph.current.length || '—') + '</div>' +
-      '<div class="aspect-copilot-card"><h4>🧬 Карта знаний производства</h4><p>Copilot связывает записи, которые уже есть на устройстве. Никаких догадок о причинах: повтор считается только при совпадении данных в истории.</p>' +
-      '<div style="display:flex;gap:7px;margin-top:8px"><input id="aspect-copilot-knowledge-search" value="' + esc(state.knowledgeQuery || '') + '" class="aspect-copilot-input" style="min-height:0;flex:1" placeholder="Поиск по артикулу, лоту, линии или дефекту"><button onclick="aspectCopilotSearchKnowledge()" style="border:0;border-radius:12px;padding:0 12px;color:#fff;background:#3730a3;font:900 9px system-ui;cursor:pointer">Найти</button></div><p style="margin:7px 0 0;color:#94a3b8">' + esc(matchNote) + '</p></div>' +
-      '<div class="aspect-copilot-card"><h4>⚠️ Повторяющиеся сигналы</h4><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px"><div><p style="margin:0 0 4px;font-weight:900">Лоты</p>' + list(graph.suspiciousLots,'Повторов по лотам не найдено') + '</div><div><p style="margin:0 0 4px;font-weight:900">Дефекты</p>' + list(graph.recurringDefects,'Повторных дефектов не найдено') + '</div><div><p style="margin:0 0 4px;font-weight:900">Линии</p>' + list(graph.lineSignals,'Недостаточно сигналов по линиям') + '</div></div></div>' +
-      rootCauseHtml(scan, graph) +
-      '<div class="aspect-copilot-card"><h4>🔗 Самые сильные связи</h4>' + links + '</div>' +
-      '<div class="aspect-copilot-card"><h4>📌 Текущий контекст</h4>' + (graph.current.length ? '<ul>' + graph.current.slice(0,6).map(row => '<li>• ' + esc([row.source,row.article,row.line && 'линия ' + row.line,row.lot && 'лот ' + row.lot,row.defect].filter(Boolean).join(' · ')) + (row.dE != null ? ' · ΔE ' + formatNum(row.dE,2) : '') + '</li>').join('') + '</ul>' : '<p>Для текущего артикула совпадений пока нет. Сохраните рецепт или партию — связь появится автоматически.</p>') + '</div>';
-  }
-
-  function renderCopilot() {
-    const scan = state.scan || collectScan();
-    state.scan = scan;
-    const content = state.tab === 'risk' ? riskHtml(scan) : state.tab === 'correction' ? correctionHtml(scan) : state.tab === 'handover' ? handoverHtml(scan) : state.tab === 'knowledge' ? knowledgeHtml(scan) : state.tab === 'passport' ? passportHtml(scan) : overviewHtml(scan);
-    const tabs = [['overview','Сводка'],['passport','Паспорт партии'],['risk','Риск запуска'],['correction','Коррекция'],['knowledge','Знания'],['handover','Смена']];
-    const tabsHtml = tabs.map(item => '<button class="aspect-copilot-tab ' + (state.tab === item[0] ? 'active' : '') + '" onclick="aspectCopilotSetTab(\'' + item[0] + '\')">' + item[1] + '</button>').join('');
-    const root = byId('aspect-copilot-root');
-    if (!root) return;
-    root.innerHTML = '<div class="aspect-copilot-head"><div style="display:flex;justify-content:space-between;align-items:start;gap:10px"><div><div style="font:900 9px/1 system-ui,sans-serif;letter-spacing:.12em;opacity:.72;text-transform:uppercase">Aspect Intelligence</div><div style="margin-top:5px;font:900 20px/1.1 system-ui,sans-serif">🤖 Copilot производства</div><div style="margin-top:6px;font:700 10px/1.4 system-ui,sans-serif;opacity:.82">Объяснимый контроль цвета, партии и смены</div></div><button onclick="aspectCopilotClose()" style="border:0;border-radius:12px;padding:8px 10px;color:#fff;background:rgba(255,255,255,.14);font:900 11px system-ui;cursor:pointer">✕</button></div></div><div class="aspect-copilot-tabs">' + tabsHtml + '</div><div class="aspect-copilot-body">' + content + '<div class="aspect-copilot-card"><h4>Спросить Copilot</h4><textarea id="aspect-copilot-question" class="aspect-copilot-input" rows="2" placeholder="Например: что проверить перед запуском этой партии?"></textarea><div class="aspect-copilot-actions"><button class="secondary" onclick="aspectCopilotAsk()">Локальный разбор</button><button class="secondary" onclick="aspectCopilotAskGateway()">⚡ AI-gateway</button><button class="ghost" onclick="aspectCopilotScan()">↻ Обновить состояние</button></div><div id="aspect-copilot-answer"></div></div></div>';
-  }
-
-  function openCopilot() {
-    const modal = byId('aspect-copilot-modal');
-    if (!modal) return;
-    state.tab = 'overview';
-    state.scan = collectScan();
-    modal.classList.remove('hidden');
-    renderCopilot();
-    enrichScan(state.scan);
-  }
-  function closeCopilot() { const modal = byId('aspect-copilot-modal'); if (modal) modal.classList.add('hidden'); }
-  function setTab(tab) { state.tab = tab; renderCopilot(); }
-  function scan() { state.scan = collectScan(); renderCopilot(); enrichScan(state.scan); }
-  function go(tab) {
-    closeCopilot();
-    if (typeof switchView === 'function') switchView(tab);
-  }
-  function saveReport() {
-    const report = { ...state.scan, savedAt: new Date().toISOString() };
-    const list = safeJson('aspect_copilot_reports', []);
-    list.push(report);
-    try { localStorage.setItem('aspect_copilot_reports', JSON.stringify(list.slice(-50))); } catch (e) {}
-    if (typeof toast === 'function') toast('Снимок Copilot сохранён');
-  }
-  function saveCorrection() {
-    const note = text('aspect-copilot-correction-note');
-    if (!note) return;
-    const list = safeJson('aspect_copilot_corrections', []);
-    list.push({ note, article: state.scan && state.scan.article, line: state.scan && state.scan.line, at: new Date().toISOString() });
-    try { localStorage.setItem('aspect_copilot_corrections', JSON.stringify(list.slice(-100))); } catch (e) {}
-    if (typeof addAIMessage === 'function') addAIMessage('🧪 Copilot: рекомендация по коррекции сохранена — ' + note);
-    if (typeof toast === 'function') toast('Рекомендация сохранена в журнал Copilot');
-  }
-  function copyHandover() {
-    const value = text('aspect-copilot-handover');
-    if (navigator.clipboard && value) navigator.clipboard.writeText(value).then(() => { if (typeof toast === 'function') toast('Передача смены скопирована'); });
-  }
-  function saveHandover() {
-    const value = text('aspect-copilot-handover');
-    if (!value) return;
-    const list = safeJson('aspect_copilot_handovers', []);
-    list.push({ text:value, at:new Date().toISOString() });
-    try { localStorage.setItem('aspect_copilot_handovers', JSON.stringify(list.slice(-30))); } catch (e) {}
-    if (typeof addAIMessage === 'function') addAIMessage('📤 Copilot: передача смены сохранена');
-    if (typeof toast === 'function') toast('Передача смены сохранена локально');
-  }
-  function searchKnowledge() {
-    state.knowledgeQuery = text('aspect-copilot-knowledge-search');
-    renderCopilot();
-  }
-  async function askGateway() {
-    const answer = byId('aspect-copilot-answer');
-    if (!answer) return;
-    const scan = state.scan || collectScan();
-    const question = text('aspect-copilot-question') || 'Определи наиболее вероятную первопричину и следующий шаг перед запуском.';
-    const graph = buildKnowledgeGraph(scan);
-    answer.innerHTML = '<div class="aspect-copilot-card" style="margin-top:10px;background:#eef4ff;border-color:#c7d2fe"><p style="margin:0">⚡ Подключаю защищённый AI-gateway…</p></div>';
-    try {
-      const response = await fetch('/api/copilot/analyze', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          question,
-          scan,
-          knowledge:{
-            rows:graph.rows.slice(-160),
-            topLinks:graph.topLinks,
-            suspiciousLots:graph.suspiciousLots,
-            recurringDefects:graph.recurringDefects,
-            lineSignals:graph.lineSignals
-          }
-        })
-      });
-      if (!response.ok) throw new Error('gateway ' + response.status);
-      const payload = await response.json();
-      const body = String(payload.answer || payload.message || '').trim();
-      if (!body) throw new Error('empty gateway response');
-      const source = payload.source === 'model' ? 'серверная модель' : 'серверный fallback';
-      answer.innerHTML = '<div class="aspect-copilot-card" style="margin-top:10px;background:#ecfdf5;border-color:#a7f3d0"><p style="margin:0 0 7px">⚡ <b>AI-gateway · ' + esc(source) + '</b></p><p style="margin:0;white-space:pre-line">' + esc(body) + '</p></div>';
-    } catch (error) {
-      const localAnswer = byId('aspect-copilot-answer');
-      ask();
-      if (localAnswer) localAnswer.innerHTML += '<p style="margin:7px 0 0;color:#94a3b8;font:700 9px/1.4 system-ui">Gateway пока недоступен — показан локальный анализ. Для подключения запустите aspect-copilot-gateway.js.</p>';
-    }
-  }
-  function ask() {
-    const q = text('aspect-copilot-question').toLowerCase();
-    const answer = byId('aspect-copilot-answer');
-    if (!answer) return;
-    const scan = state.scan || collectScan();
-    let response = q.includes('запуск') || q.includes('провер')
-      ? 'Перед запуском: подтвердите ΔE, проверьте лот основы, выберите линию и сохраните фото эталона/замеса. Сейчас риск ' + scan.risk + '/100.'
-      : q.includes('причин') || q.includes('почему')
-      ? (function () {
-          const graph = buildKnowledgeGraph(scan);
-          const top = inferRootCauses(scan, graph)[0];
-          return 'Наиболее вероятная причина: «' + top.title + '» (' + top.confidence + '%). ' + top.evidence + ' Действие: ' + top.action;
-        })()
-      : q.includes('брак') || q.includes('дефект')
-      ? 'Для расследования нужен метр рулона, фото дефекта и привязка к секции. Откройте «Контроль брака» — там уже есть карта рулона и журнал CV.'
-      : q.includes('смен') || q.includes('передач')
-      ? 'Откройте вкладку «Смена»: Copilot соберёт артикул, линию, ΔE, незавершённые действия и контекст рецепта в один текст.'
-      : 'Я могу разобрать риск запуска, коррекцию цвета, дефект или передачу смены. Сформулируйте вопрос через один из этих контекстов.';
-    answer.innerHTML = '<div class="aspect-copilot-card" style="margin-top:10px;background:#eef4ff;border-color:#c7d2fe"><p style="margin:0">💡 ' + esc(response) + '</p></div>';
-  }
-
-  window.aspectCopilotSetTab = setTab;
-  window.aspectCopilotOpen = openCopilot;
-  window.aspectCopilotRender = renderCopilot;
-  window.aspectCopilotClose = closeCopilot;
-  window.aspectCopilotScan = scan;
-  window.aspectCopilotGo = go;
-  window.aspectCopilotSaveReport = saveReport;
-  window.aspectCopilotSaveCorrection = saveCorrection;
-  window.aspectCopilotCopyHandover = copyHandover;
-  window.aspectCopilotSaveHandover = saveHandover;
-  window.aspectCopilotSearchKnowledge = searchKnowledge;
-  window.aspectCopilotAskGateway = askGateway;
-  window.aspectCopilotAsk = ask;
-  window.aspectCopilotCreatePassport = createPassport;
-  window.aspectCopilotUpdatePassport = updatePassport;
-  window.aspectCopilotAddPassportEvent = addPassportEvent;
-  window.aspectCopilotOpenPassport = openPassport;
-  window.aspectCopilotNewPassport = newPassport;
-  window.aspectCopilotSubmitPassport = submitPassport;
-  window.aspectCopilotClosePassport = closePassport;
-  window.aspectCopilotReopenPassport = reopenPassport;
-  window.aspectCopilotReadPassports = readPassports;
-  window.aspectCopilotWritePassports = writePassports;
-  window.aspectCopilotMergePassports = mergePassportLists;
-
-  const fab = document.createElement('button');
-  fab.id = 'aspect-copilot-fab'; fab.type = 'button'; fab.innerHTML = '🤖 Copilot';
-  fab.title = 'Открыть интеллектуальный контроль производства';
-  fab.addEventListener('click', openCopilot);
-  document.body.appendChild(fab);
-
-  const modal = document.createElement('div');
-  modal.id = 'aspect-copilot-modal'; modal.className = 'hidden';
-  modal.addEventListener('click', event => { if (event.target === modal) closeCopilot(); });
-  modal.innerHTML = '<div class="aspect-copilot-sheet"><div id="aspect-copilot-root"></div></div>';
-  document.body.appendChild(modal);
+  setTimeout(function () {
+    var report = aspectModulesSelfCheck();
+    if (report.ok) return;
+    var msg = 'Не загрузились модули: ' + report.failed.join(', ') +
+      '. Положите js/css рядом с HTML или откройте AspectRu_standalone.html';
+    if (typeof toast === 'function') toast(msg);
+    else console.warn('[aspect]', msg);
+  }, 2800);
 })();
 </script>
 </body>
 </html>
+
